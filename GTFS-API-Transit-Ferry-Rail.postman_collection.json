@@ -1,0 +1,3892 @@
+{
+  "info": {
+    "_postman_id": "8f2c1a4e-6b7d-4f3a-9c2e-6a1b5d7f3c90",
+    "name": "GTFS API — Transit + Ferry + Rail",
+    "description": "FastAPI backend in `api.py` serving **three separate databases** from one service: transit (bus), ferry (water) and rail.\n\nEvery endpoint keeps its original path and takes `?mode=transit|ferry|rail` (default: transit).\n\n**Build the databases**\n```\npython3 gtfs_builder.py        # builds gtfs.sqlite + water-gtfs.sqlite + rail-gtfs.sqlite\n```\n\n**Run the server**\n```\npython3 -m uvicorn api:app --reload --port 8000\n```\n\n**Agency filtering** — `/api/routes` and `/api/gtfs-stops` accept `agency_id`; see folder 04.\n\n**Variables** — `baseUrl`, `mode`, `osmNodeId`.\nSample IDs are unprefixed and mode-specific.\n\n**Tips** — percent-encode `+` as `%2B` in `departure_date_time`, and percent-encode rail route IDs (`/`, `+`, `=`).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "01 · Transit (bus)",
+      "description": "Transit database (gtfs.sqlite). Every request sends mode=transit.",
+      "item": [
+        {
+          "name": "[transit] Agencies",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/agencies?mode=transit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agencies"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "List every agency in the transit database with route/stop counts."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] Agency detail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/agencies/{agency_id}?mode=transit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agencies",
+                "{agency_id}"
+              ],
+              "variable": [
+                {
+                  "key": "agency_id",
+                  "value": "1",
+                  "description": "agency_id (transit) — e.g. 1"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Single transit agency by agency_id."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] Agency → routes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/agencies/{agency_id}/routes?mode=transit&offset=0&limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agencies",
+                "{agency_id}",
+                "routes"
+              ],
+              "variable": [
+                {
+                  "key": "agency_id",
+                  "value": "1",
+                  "description": "agency_id (transit) — e.g. 1"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "offset",
+                  "value": "0",
+                  "description": "Routes to skip."
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Max routes (1–500)."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Paginated routes belonging to a transit agency."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] Agency → stops",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/agencies/{agency_id}/stops?mode=transit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agencies",
+                "{agency_id}",
+                "stops"
+              ],
+              "variable": [
+                {
+                  "key": "agency_id",
+                  "value": "1",
+                  "description": "agency_id (transit) — e.g. 1"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Every stop served by a transit agency's routes."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] GTFS count",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/gtfs-count?mode=transit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "gtfs-count"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Route and stop counts for the transit database."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] All GTFS stops",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/gtfs-stops?mode=transit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "gtfs-stops"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "agency_id",
+                  "value": "1",
+                  "description": "Only stops served by this agency."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Every transit stop (optionally filtered by agency)."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] Stop → routes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/stops/{stop_id}/routes?mode=transit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "stops",
+                "{stop_id}",
+                "routes"
+              ],
+              "variable": [
+                {
+                  "key": "stop_id",
+                  "value": "00102A",
+                  "description": "stop_id (transit) — e.g. 00102A"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Routes serving a transit stop."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] Stop → next departures",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/stops/{stop_id}/next-departures?mode=transit&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "stops",
+                "{stop_id}",
+                "next-departures"
+              ],
+              "variable": [
+                {
+                  "key": "stop_id",
+                  "value": "00102A",
+                  "description": "stop_id (transit) — e.g. 00102A"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "at",
+                  "value": "14:30",
+                  "description": "ISO datetime or time, e.g. '2026-04-12T14:30' or '14:30'. Defaults to now."
+                },
+                {
+                  "key": "route",
+                  "value": "",
+                  "description": "Optional route_short_name filter."
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Max results to return (1–100)."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Upcoming departures from a transit stop."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] Stop → next departures (both)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/stops/{stop_id}/next-departures-both?mode=transit&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "stops",
+                "{stop_id}",
+                "next-departures-both"
+              ],
+              "variable": [
+                {
+                  "key": "stop_id",
+                  "value": "00102A",
+                  "description": "stop_id (transit) — e.g. 00102A"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "at",
+                  "value": "14:30",
+                  "description": "ISO datetime or time, e.g. '2026-04-12T14:30' or '14:30'. Defaults to now."
+                },
+                {
+                  "key": "route",
+                  "value": "",
+                  "description": "Optional route_short_name filter."
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Max results to return (1–100)."
+                }
+              ],
+              "description": "Upcoming departures both directions from a transit stop."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] Stop → shapes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/stops/{stop_id}/shapes?mode=transit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "stops",
+                "{stop_id}",
+                "shapes"
+              ],
+              "variable": [
+                {
+                  "key": "stop_id",
+                  "value": "00102A",
+                  "description": "stop_id (transit) — e.g. 00102A"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Shapes of trips through a transit stop."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] All routes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes?mode=transit&offset=0&limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "Search by route name or headsign."
+                },
+                {
+                  "key": "agency_id",
+                  "value": "1",
+                  "description": "Only routes from this agency."
+                },
+                {
+                  "key": "offset",
+                  "value": "0",
+                  "description": "Number of routes to skip."
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Max routes (1–500)."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Paginated transit routes (search + agency filter)."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] Route → stops",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes/{route_id}/stops?mode=transit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes",
+                "{route_id}",
+                "stops"
+              ],
+              "variable": [
+                {
+                  "key": "route_id",
+                  "value": "11-11-P-6p2-1",
+                  "description": "route_id (transit) — e.g. 11-11-P-6p2-1"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "direction_id",
+                  "value": "0",
+                  "description": "Filter by direction: 0 or 1."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Ordered stops served by a transit route."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] Route → next departures",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes/{route_id}/next-departures?mode=transit&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes",
+                "{route_id}",
+                "next-departures"
+              ],
+              "variable": [
+                {
+                  "key": "route_id",
+                  "value": "11-11-P-6p2-1",
+                  "description": "route_id (transit) — e.g. 11-11-P-6p2-1"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "at",
+                  "value": "14:30",
+                  "description": "ISO datetime or time, e.g. '2026-04-12T14:30' or '14:30'. Defaults to now."
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Max results to return (1–100)."
+                }
+              ],
+              "description": "Upcoming departures for a transit route."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] Route → next departures (both)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes/{route_id}/next-departures-both?mode=transit&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes",
+                "{route_id}",
+                "next-departures-both"
+              ],
+              "variable": [
+                {
+                  "key": "route_id",
+                  "value": "11-11-P-6p2-1",
+                  "description": "route_id (transit) — e.g. 11-11-P-6p2-1"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "at",
+                  "value": "14:30",
+                  "description": "ISO datetime or time, e.g. '2026-04-12T14:30' or '14:30'. Defaults to now."
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Max results to return (1–100)."
+                }
+              ],
+              "description": "Upcoming departures for a transit route, both directions."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] Route + stop → next departures",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes/{route_id}/stops/{stop_id}/next-departures?mode=transit&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes",
+                "{route_id}",
+                "stops",
+                "{stop_id}",
+                "next-departures"
+              ],
+              "variable": [
+                {
+                  "key": "route_id",
+                  "value": "11-11-P-6p2-1",
+                  "description": "route_id"
+                },
+                {
+                  "key": "stop_id",
+                  "value": "03432B",
+                  "description": "stop_id served by this route"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "at",
+                  "value": "14:30",
+                  "description": "ISO datetime or time, e.g. '2026-04-12T14:30' or '14:30'. Defaults to now."
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Max results to return (1–100)."
+                }
+              ],
+              "description": "Upcoming departures of one transit route at one stop."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] Route → schedule",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes/{route_id}/schedule?mode=transit&filter=today&upcoming=true&limit=50&offset=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes",
+                "{route_id}",
+                "schedule"
+              ],
+              "variable": [
+                {
+                  "key": "route_id",
+                  "value": "11-11-P-6p2-1",
+                  "description": "route_id (transit) — e.g. 11-11-P-6p2-1"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "filter",
+                  "value": "today",
+                  "description": "'today', 'tomorrow', 'this_week', or MM/DD/YYYY."
+                },
+                {
+                  "key": "departure_time",
+                  "value": "",
+                  "description": "Only trips departing at/after this time (HH:MM or HH:MM:SS)."
+                },
+                {
+                  "key": "time",
+                  "value": "",
+                  "description": "Filter trips by this time (HH:MM or HH:MM:SS)."
+                },
+                {
+                  "key": "upcoming",
+                  "value": "true",
+                  "description": "true → trips at/after 'time'; false → ended before."
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Max trips per day (1–500)."
+                },
+                {
+                  "key": "offset",
+                  "value": "0",
+                  "description": "Trips to skip per day."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Full transit schedule for a route, grouped by day."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] Route → shapes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes/{route_id}/shapes?mode=transit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes",
+                "{route_id}",
+                "shapes"
+              ],
+              "variable": [
+                {
+                  "key": "route_id",
+                  "value": "11-11-P-6p2-1",
+                  "description": "route_id (transit) — e.g. 11-11-P-6p2-1"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Shape polylines for a transit route."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] Route + shape → trips",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes/{route_id}/shapes/{shape_id}/trips?mode=transit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes",
+                "{route_id}",
+                "shapes",
+                "{shape_id}",
+                "trips"
+              ],
+              "variable": [
+                {
+                  "key": "route_id",
+                  "value": "11-11-P-6p2-1",
+                  "description": "route_id (transit) — e.g. 11-11-P-6p2-1"
+                },
+                {
+                  "key": "shape_id",
+                  "value": "11-11-P-6p2-1.1.O",
+                  "description": "shape_id (transit) — e.g. 11-11-P-6p2-1.1.O"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Trips of a transit route using a shape."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] Trip lookup (GET)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/trips/lookup?mode=transit&route_id=11-11-P-6p2-1&max_results=3",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trips",
+                "lookup"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "route_id",
+                  "value": "11-11-P-6p2-1",
+                  "description": "GTFS route_id (required)."
+                },
+                {
+                  "key": "headsign",
+                  "value": "ZAYED PORT< 42 Abu Dhabi",
+                  "description": "Trip headsign to match."
+                },
+                {
+                  "key": "stop_ids",
+                  "value": "03432B",
+                  "description": "Ordered stop_ids."
+                },
+                {
+                  "key": "departure_date_time",
+                  "value": "2026-10-26T17:26:11%2B04:00",
+                  "description": "ISO datetime. Percent-encode the offset as %2B."
+                },
+                {
+                  "key": "max_results",
+                  "value": "3",
+                  "description": "Max trips (1–50)."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Find transit trips by route / headsign / stops / time."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] Trip lookup (POST)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/trips/lookup?mode=transit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trips",
+                "lookup"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "JSON-body trip lookup for transit."
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"route_id\": \"11-11-P-6p2-1\",\n  \"departure_date_time\": \"2026-10-28T12:21+04:00\",\n  \"headsign\": \"ZAYED PORT< 42 Abu Dhabi\",\n  \"stop_ids\": [\n    \"03432B\"\n  ],\n  \"max_results\": 3,\n  \"departure_offset_minutes\": 5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] Trip → stop times",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/trips/{trip_id}/stop-times?mode=transit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trips",
+                "{trip_id}",
+                "stop-times"
+              ],
+              "variable": [
+                {
+                  "key": "trip_id",
+                  "value": "1.TWD.11-11-P-6p2-1.1.O",
+                  "description": "trip_id (transit) — e.g. 1.TWD.11-11-P-6p2-1.1.O"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Ordered stop times for a transit trip."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] Trip → stop times (both)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/trips/{trip_id}/stop-times-both?mode=transit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trips",
+                "{trip_id}",
+                "stop-times-both"
+              ],
+              "variable": [
+                {
+                  "key": "trip_id",
+                  "value": "1.TWD.11-11-P-6p2-1.1.O",
+                  "description": "trip_id (transit) — e.g. 1.TWD.11-11-P-6p2-1.1.O"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Stop times for a transit trip, both directions."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] Trip → shapes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/trips/{trip_id}/shapes?mode=transit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trips",
+                "{trip_id}",
+                "shapes"
+              ],
+              "variable": [
+                {
+                  "key": "trip_id",
+                  "value": "1.TWD.11-11-P-6p2-1.1.O",
+                  "description": "trip_id (transit) — e.g. 1.TWD.11-11-P-6p2-1.1.O"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Shape points for a transit trip."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] All shapes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/shapes?mode=transit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "shapes"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Every transit shape as GeoJSON."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] Shapes between A → B",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/shapes/between?mode=transit&start_stop_id=03432B&end_stop_id=01113A",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "shapes",
+                "between"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "start_stop_id",
+                  "value": "03432B",
+                  "description": "Boarding stop_id."
+                },
+                {
+                  "key": "end_stop_id",
+                  "value": "01113A",
+                  "description": "Alighting stop_id."
+                }
+              ],
+              "description": "Shape geometry between two transit stops."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] Serving routes (A → B)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/serving-routes?mode=transit&start_stop_id=03432B&end_stop_id=01113A",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "serving-routes"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "start_stop_id",
+                  "value": "03432B",
+                  "description": "Boarding stop_id."
+                },
+                {
+                  "key": "end_stop_id",
+                  "value": "01113A",
+                  "description": "Alighting stop_id."
+                }
+              ],
+              "description": "transit routes from the start stop to the end stop."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[transit] Departures A → B",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/departures?mode=transit&start_stop_id=03432B&end_stop_id=01113A&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "departures"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "start_stop_id",
+                  "value": "03432B",
+                  "description": "Boarding stop_id."
+                },
+                {
+                  "key": "end_stop_id",
+                  "value": "01113A",
+                  "description": "Alighting stop_id."
+                },
+                {
+                  "key": "at",
+                  "value": "14:30",
+                  "description": "ISO datetime or time, e.g. '2026-04-12T14:30' or '14:30'. Defaults to now."
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Max results to return (1–100)."
+                }
+              ],
+              "description": "transit departures from the start stop to the end stop."
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "02 · Ferry (water)",
+      "description": "Ferry database (water-gtfs.sqlite). Every request sends mode=ferry.",
+      "item": [
+        {
+          "name": "[ferry] Agencies",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/agencies?mode=ferry",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agencies"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "List every agency in the ferry database with route/stop counts."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] Agency detail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/agencies/{agency_id}?mode=ferry",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agencies",
+                "{agency_id}"
+              ],
+              "variable": [
+                {
+                  "key": "agency_id",
+                  "value": "AG_AD_PORTS",
+                  "description": "agency_id (ferry) — e.g. AG_AD_PORTS"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Single ferry agency by agency_id."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] Agency → routes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/agencies/{agency_id}/routes?mode=ferry&offset=0&limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agencies",
+                "{agency_id}",
+                "routes"
+              ],
+              "variable": [
+                {
+                  "key": "agency_id",
+                  "value": "AG_AD_PORTS",
+                  "description": "agency_id (ferry) — e.g. AG_AD_PORTS"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "offset",
+                  "value": "0",
+                  "description": "Routes to skip."
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Max routes (1–500)."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Paginated routes belonging to a ferry agency."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] Agency → stops",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/agencies/{agency_id}/stops?mode=ferry",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agencies",
+                "{agency_id}",
+                "stops"
+              ],
+              "variable": [
+                {
+                  "key": "agency_id",
+                  "value": "AG_AD_PORTS",
+                  "description": "agency_id (ferry) — e.g. AG_AD_PORTS"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Every stop served by a ferry agency's routes."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] GTFS count",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/gtfs-count?mode=ferry",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "gtfs-count"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Route and stop counts for the ferry database."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] All GTFS stops",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/gtfs-stops?mode=ferry",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "gtfs-stops"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "agency_id",
+                  "value": "AG_AD_PORTS",
+                  "description": "Only stops served by this agency."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Every ferry stop (optionally filtered by agency)."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] Stop → routes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/stops/{stop_id}/routes?mode=ferry",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "stops",
+                "{stop_id}",
+                "routes"
+              ],
+              "variable": [
+                {
+                  "key": "stop_id",
+                  "value": "AEAFS",
+                  "description": "stop_id (ferry) — e.g. AEAFS"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Routes serving a ferry stop."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] Stop → next departures",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/stops/{stop_id}/next-departures?mode=ferry&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "stops",
+                "{stop_id}",
+                "next-departures"
+              ],
+              "variable": [
+                {
+                  "key": "stop_id",
+                  "value": "AEAFS",
+                  "description": "stop_id (ferry) — e.g. AEAFS"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "at",
+                  "value": "14:30",
+                  "description": "ISO datetime or time, e.g. '2026-04-12T14:30' or '14:30'. Defaults to now."
+                },
+                {
+                  "key": "route",
+                  "value": "",
+                  "description": "Optional route_short_name filter."
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Max results to return (1–100)."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Upcoming departures from a ferry stop."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] Stop → next departures (both)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/stops/{stop_id}/next-departures-both?mode=ferry&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "stops",
+                "{stop_id}",
+                "next-departures-both"
+              ],
+              "variable": [
+                {
+                  "key": "stop_id",
+                  "value": "AEAFS",
+                  "description": "stop_id (ferry) — e.g. AEAFS"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "at",
+                  "value": "14:30",
+                  "description": "ISO datetime or time, e.g. '2026-04-12T14:30' or '14:30'. Defaults to now."
+                },
+                {
+                  "key": "route",
+                  "value": "",
+                  "description": "Optional route_short_name filter."
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Max results to return (1–100)."
+                }
+              ],
+              "description": "Upcoming departures both directions from a ferry stop."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] Stop → shapes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/stops/{stop_id}/shapes?mode=ferry",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "stops",
+                "{stop_id}",
+                "shapes"
+              ],
+              "variable": [
+                {
+                  "key": "stop_id",
+                  "value": "AEAFS",
+                  "description": "stop_id (ferry) — e.g. AEAFS"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Shapes of trips through a ferry stop."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] All routes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes?mode=ferry&offset=0&limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "Search by route name or headsign."
+                },
+                {
+                  "key": "agency_id",
+                  "value": "AG_AD_PORTS",
+                  "description": "Only routes from this agency."
+                },
+                {
+                  "key": "offset",
+                  "value": "0",
+                  "description": "Number of routes to skip."
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Max routes (1–500)."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Paginated ferry routes (search + agency filter)."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] Route → stops",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes/{route_id}/stops?mode=ferry",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes",
+                "{route_id}",
+                "stops"
+              ],
+              "variable": [
+                {
+                  "key": "route_id",
+                  "value": "R_YBQA",
+                  "description": "route_id (ferry) — e.g. R_YBQA"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "direction_id",
+                  "value": "0",
+                  "description": "Filter by direction: 0 or 1."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Ordered stops served by a ferry route."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] Route → next departures",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes/{route_id}/next-departures?mode=ferry&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes",
+                "{route_id}",
+                "next-departures"
+              ],
+              "variable": [
+                {
+                  "key": "route_id",
+                  "value": "R_YBQA",
+                  "description": "route_id (ferry) — e.g. R_YBQA"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "at",
+                  "value": "14:30",
+                  "description": "ISO datetime or time, e.g. '2026-04-12T14:30' or '14:30'. Defaults to now."
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Max results to return (1–100)."
+                }
+              ],
+              "description": "Upcoming departures for a ferry route."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] Route → next departures (both)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes/{route_id}/next-departures-both?mode=ferry&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes",
+                "{route_id}",
+                "next-departures-both"
+              ],
+              "variable": [
+                {
+                  "key": "route_id",
+                  "value": "R_YBQA",
+                  "description": "route_id (ferry) — e.g. R_YBQA"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "at",
+                  "value": "14:30",
+                  "description": "ISO datetime or time, e.g. '2026-04-12T14:30' or '14:30'. Defaults to now."
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Max results to return (1–100)."
+                }
+              ],
+              "description": "Upcoming departures for a ferry route, both directions."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] Route + stop → next departures",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes/{route_id}/stops/{stop_id}/next-departures?mode=ferry&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes",
+                "{route_id}",
+                "stops",
+                "{stop_id}",
+                "next-departures"
+              ],
+              "variable": [
+                {
+                  "key": "route_id",
+                  "value": "R_YBQA",
+                  "description": "route_id"
+                },
+                {
+                  "key": "stop_id",
+                  "value": "AEQNA",
+                  "description": "stop_id served by this route"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "at",
+                  "value": "14:30",
+                  "description": "ISO datetime or time, e.g. '2026-04-12T14:30' or '14:30'. Defaults to now."
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Max results to return (1–100)."
+                }
+              ],
+              "description": "Upcoming departures of one ferry route at one stop."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] Route → schedule",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes/{route_id}/schedule?mode=ferry&filter=today&upcoming=true&limit=50&offset=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes",
+                "{route_id}",
+                "schedule"
+              ],
+              "variable": [
+                {
+                  "key": "route_id",
+                  "value": "R_YBQA",
+                  "description": "route_id (ferry) — e.g. R_YBQA"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "filter",
+                  "value": "today",
+                  "description": "'today', 'tomorrow', 'this_week', or MM/DD/YYYY."
+                },
+                {
+                  "key": "departure_time",
+                  "value": "",
+                  "description": "Only trips departing at/after this time (HH:MM or HH:MM:SS)."
+                },
+                {
+                  "key": "time",
+                  "value": "",
+                  "description": "Filter trips by this time (HH:MM or HH:MM:SS)."
+                },
+                {
+                  "key": "upcoming",
+                  "value": "true",
+                  "description": "true → trips at/after 'time'; false → ended before."
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Max trips per day (1–500)."
+                },
+                {
+                  "key": "offset",
+                  "value": "0",
+                  "description": "Trips to skip per day."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Full ferry schedule for a route, grouped by day."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] Route → shapes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes/{route_id}/shapes?mode=ferry",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes",
+                "{route_id}",
+                "shapes"
+              ],
+              "variable": [
+                {
+                  "key": "route_id",
+                  "value": "R_YBQA",
+                  "description": "route_id (ferry) — e.g. R_YBQA"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Shape polylines for a ferry route."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] Route + shape → trips",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes/{route_id}/shapes/{shape_id}/trips?mode=ferry",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes",
+                "{route_id}",
+                "shapes",
+                "{shape_id}",
+                "trips"
+              ],
+              "variable": [
+                {
+                  "key": "route_id",
+                  "value": "R_YBQA",
+                  "description": "route_id (ferry) — e.g. R_YBQA"
+                },
+                {
+                  "key": "shape_id",
+                  "value": "shp_AEQNA_AEYBY",
+                  "description": "shape_id (ferry) — e.g. shp_AEQNA_AEYBY"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Trips of a ferry route using a shape."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] Trip lookup (GET)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/trips/lookup?mode=ferry&route_id=R_YBQA&max_results=3",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trips",
+                "lookup"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "route_id",
+                  "value": "R_YBQA",
+                  "description": "GTFS route_id (required)."
+                },
+                {
+                  "key": "headsign",
+                  "value": "Yas Bay",
+                  "description": "Trip headsign to match."
+                },
+                {
+                  "key": "stop_ids",
+                  "value": "AEQNA",
+                  "description": "Ordered stop_ids."
+                },
+                {
+                  "key": "departure_date_time",
+                  "value": "2026-10-26T17:26:11%2B04:00",
+                  "description": "ISO datetime. Percent-encode the offset as %2B."
+                },
+                {
+                  "key": "max_results",
+                  "value": "3",
+                  "description": "Max trips (1–50)."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Find ferry trips by route / headsign / stops / time."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] Trip lookup (POST)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/trips/lookup?mode=ferry",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trips",
+                "lookup"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "JSON-body trip lookup for ferry."
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"route_id\": \"R_YBQA\",\n  \"departure_date_time\": \"2026-10-28T12:21+04:00\",\n  \"headsign\": \"Yas Bay\",\n  \"stop_ids\": [\n    \"AEQNA\"\n  ],\n  \"max_results\": 3,\n  \"departure_offset_minutes\": 5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] Trip → stop times",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/trips/{trip_id}/stop-times?mode=ferry",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trips",
+                "{trip_id}",
+                "stop-times"
+              ],
+              "variable": [
+                {
+                  "key": "trip_id",
+                  "value": "TRIP_RED_OB_1",
+                  "description": "trip_id (ferry) — e.g. TRIP_RED_OB_1"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Ordered stop times for a ferry trip."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] Trip → stop times (both)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/trips/{trip_id}/stop-times-both?mode=ferry",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trips",
+                "{trip_id}",
+                "stop-times-both"
+              ],
+              "variable": [
+                {
+                  "key": "trip_id",
+                  "value": "TRIP_RED_OB_1",
+                  "description": "trip_id (ferry) — e.g. TRIP_RED_OB_1"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Stop times for a ferry trip, both directions."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] Trip → shapes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/trips/{trip_id}/shapes?mode=ferry",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trips",
+                "{trip_id}",
+                "shapes"
+              ],
+              "variable": [
+                {
+                  "key": "trip_id",
+                  "value": "TRIP_RED_OB_1",
+                  "description": "trip_id (ferry) — e.g. TRIP_RED_OB_1"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Shape points for a ferry trip."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] All shapes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/shapes?mode=ferry",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "shapes"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Every ferry shape as GeoJSON."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] Shapes between A → B",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/shapes/between?mode=ferry&start_stop_id=AEQNA&end_stop_id=AEYBY",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "shapes",
+                "between"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "start_stop_id",
+                  "value": "AEQNA",
+                  "description": "Boarding stop_id."
+                },
+                {
+                  "key": "end_stop_id",
+                  "value": "AEYBY",
+                  "description": "Alighting stop_id."
+                }
+              ],
+              "description": "Shape geometry between two ferry stops."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] Serving routes (A → B)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/serving-routes?mode=ferry&start_stop_id=AEQNA&end_stop_id=AEYBY",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "serving-routes"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "start_stop_id",
+                  "value": "AEQNA",
+                  "description": "Boarding stop_id."
+                },
+                {
+                  "key": "end_stop_id",
+                  "value": "AEYBY",
+                  "description": "Alighting stop_id."
+                }
+              ],
+              "description": "ferry routes from the start stop to the end stop."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[ferry] Departures A → B",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/departures?mode=ferry&start_stop_id=AEQNA&end_stop_id=AEYBY&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "departures"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "start_stop_id",
+                  "value": "AEQNA",
+                  "description": "Boarding stop_id."
+                },
+                {
+                  "key": "end_stop_id",
+                  "value": "AEYBY",
+                  "description": "Alighting stop_id."
+                },
+                {
+                  "key": "at",
+                  "value": "14:30",
+                  "description": "ISO datetime or time, e.g. '2026-04-12T14:30' or '14:30'. Defaults to now."
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Max results to return (1–100)."
+                }
+              ],
+              "description": "ferry departures from the start stop to the end stop."
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "03 · Rail",
+      "description": "Rail database (rail-gtfs.sqlite). Every request sends mode=rail. Route IDs are base64 and percent-encoded in these samples.",
+      "item": [
+        {
+          "name": "[rail] Agencies",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/agencies?mode=rail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agencies"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "List every agency in the rail database with route/stop counts."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] Agency detail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/agencies/{agency_id}?mode=rail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agencies",
+                "{agency_id}"
+              ],
+              "variable": [
+                {
+                  "key": "agency_id",
+                  "value": "3",
+                  "description": "agency_id (rail) — e.g. 3"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Single rail agency by agency_id."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] Agency → routes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/agencies/{agency_id}/routes?mode=rail&offset=0&limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agencies",
+                "{agency_id}",
+                "routes"
+              ],
+              "variable": [
+                {
+                  "key": "agency_id",
+                  "value": "3",
+                  "description": "agency_id (rail) — e.g. 3"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "offset",
+                  "value": "0",
+                  "description": "Routes to skip."
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Max routes (1–500)."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Paginated routes belonging to a rail agency."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] Agency → stops",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/agencies/{agency_id}/stops?mode=rail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agencies",
+                "{agency_id}",
+                "stops"
+              ],
+              "variable": [
+                {
+                  "key": "agency_id",
+                  "value": "3",
+                  "description": "agency_id (rail) — e.g. 3"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Every stop served by a rail agency's routes."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] GTFS count",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/gtfs-count?mode=rail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "gtfs-count"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Route and stop counts for the rail database."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] All GTFS stops",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/gtfs-stops?mode=rail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "gtfs-stops"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "agency_id",
+                  "value": "3",
+                  "description": "Only stops served by this agency."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Every rail stop (optionally filtered by agency)."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] Stop → routes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/stops/{stop_id}/routes?mode=rail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "stops",
+                "{stop_id}",
+                "routes"
+              ],
+              "variable": [
+                {
+                  "key": "stop_id",
+                  "value": "PFJ",
+                  "description": "stop_id (rail) — e.g. PFJ"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Routes serving a rail stop."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] Stop → next departures",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/stops/{stop_id}/next-departures?mode=rail&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "stops",
+                "{stop_id}",
+                "next-departures"
+              ],
+              "variable": [
+                {
+                  "key": "stop_id",
+                  "value": "PFJ",
+                  "description": "stop_id (rail) — e.g. PFJ"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "at",
+                  "value": "14:30",
+                  "description": "ISO datetime or time, e.g. '2026-04-12T14:30' or '14:30'. Defaults to now."
+                },
+                {
+                  "key": "route",
+                  "value": "",
+                  "description": "Optional route_short_name filter."
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Max results to return (1–100)."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Upcoming departures from a rail stop."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] Stop → next departures (both)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/stops/{stop_id}/next-departures-both?mode=rail&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "stops",
+                "{stop_id}",
+                "next-departures-both"
+              ],
+              "variable": [
+                {
+                  "key": "stop_id",
+                  "value": "PFJ",
+                  "description": "stop_id (rail) — e.g. PFJ"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "at",
+                  "value": "14:30",
+                  "description": "ISO datetime or time, e.g. '2026-04-12T14:30' or '14:30'. Defaults to now."
+                },
+                {
+                  "key": "route",
+                  "value": "",
+                  "description": "Optional route_short_name filter."
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Max results to return (1–100)."
+                }
+              ],
+              "description": "Upcoming departures both directions from a rail stop."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] Stop → shapes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/stops/{stop_id}/shapes?mode=rail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "stops",
+                "{stop_id}",
+                "shapes"
+              ],
+              "variable": [
+                {
+                  "key": "stop_id",
+                  "value": "PFJ",
+                  "description": "stop_id (rail) — e.g. PFJ"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Shapes of trips through a rail stop."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] All routes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes?mode=rail&offset=0&limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "Search by route name or headsign."
+                },
+                {
+                  "key": "agency_id",
+                  "value": "3",
+                  "description": "Only routes from this agency."
+                },
+                {
+                  "key": "offset",
+                  "value": "0",
+                  "description": "Number of routes to skip."
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Max routes (1–500)."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Paginated rail routes (search + agency filter)."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] Route → stops",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes/{route_id}/stops?mode=rail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes",
+                "{route_id}",
+                "stops"
+              ],
+              "variable": [
+                {
+                  "key": "route_id",
+                  "value": "YRqpPi4V4o91BvJfRf0mwg==",
+                  "description": "route_id (rail) — e.g. YRqpPi4V4o91BvJfRf0mwg=="
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "direction_id",
+                  "value": "0",
+                  "description": "Filter by direction: 0 or 1."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Ordered stops served by a rail route.\n\n⚠️ Rail route IDs are base64 and contain `/`, `+`, `=` — they must be percent-encoded in URLs (the samples below are)."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] Route → next departures",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes/{route_id}/next-departures?mode=rail&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes",
+                "{route_id}",
+                "next-departures"
+              ],
+              "variable": [
+                {
+                  "key": "route_id",
+                  "value": "YRqpPi4V4o91BvJfRf0mwg==",
+                  "description": "route_id (rail) — e.g. YRqpPi4V4o91BvJfRf0mwg=="
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "at",
+                  "value": "14:30",
+                  "description": "ISO datetime or time, e.g. '2026-04-12T14:30' or '14:30'. Defaults to now."
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Max results to return (1–100)."
+                }
+              ],
+              "description": "Upcoming departures for a rail route.\n\n⚠️ Rail route IDs are base64 and contain `/`, `+`, `=` — they must be percent-encoded in URLs (the samples below are)."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] Route → next departures (both)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes/{route_id}/next-departures-both?mode=rail&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes",
+                "{route_id}",
+                "next-departures-both"
+              ],
+              "variable": [
+                {
+                  "key": "route_id",
+                  "value": "YRqpPi4V4o91BvJfRf0mwg==",
+                  "description": "route_id (rail) — e.g. YRqpPi4V4o91BvJfRf0mwg=="
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "at",
+                  "value": "14:30",
+                  "description": "ISO datetime or time, e.g. '2026-04-12T14:30' or '14:30'. Defaults to now."
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Max results to return (1–100)."
+                }
+              ],
+              "description": "Upcoming departures for a rail route, both directions.\n\n⚠️ Rail route IDs are base64 and contain `/`, `+`, `=` — they must be percent-encoded in URLs (the samples below are)."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] Route + stop → next departures",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes/{route_id}/stops/{stop_id}/next-departures?mode=rail&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes",
+                "{route_id}",
+                "stops",
+                "{stop_id}",
+                "next-departures"
+              ],
+              "variable": [
+                {
+                  "key": "route_id",
+                  "value": "YRqpPi4V4o91BvJfRf0mwg==",
+                  "description": "route_id"
+                },
+                {
+                  "key": "stop_id",
+                  "value": "PMB1",
+                  "description": "stop_id served by this route"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "at",
+                  "value": "14:30",
+                  "description": "ISO datetime or time, e.g. '2026-04-12T14:30' or '14:30'. Defaults to now."
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Max results to return (1–100)."
+                }
+              ],
+              "description": "Upcoming departures of one rail route at one stop.\n\n⚠️ Rail route IDs are base64 and contain `/`, `+`, `=` — they must be percent-encoded in URLs (the samples below are)."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] Route → schedule",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes/{route_id}/schedule?mode=rail&filter=today&upcoming=true&limit=50&offset=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes",
+                "{route_id}",
+                "schedule"
+              ],
+              "variable": [
+                {
+                  "key": "route_id",
+                  "value": "YRqpPi4V4o91BvJfRf0mwg==",
+                  "description": "route_id (rail) — e.g. YRqpPi4V4o91BvJfRf0mwg=="
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "filter",
+                  "value": "today",
+                  "description": "'today', 'tomorrow', 'this_week', or MM/DD/YYYY."
+                },
+                {
+                  "key": "departure_time",
+                  "value": "",
+                  "description": "Only trips departing at/after this time (HH:MM or HH:MM:SS)."
+                },
+                {
+                  "key": "time",
+                  "value": "",
+                  "description": "Filter trips by this time (HH:MM or HH:MM:SS)."
+                },
+                {
+                  "key": "upcoming",
+                  "value": "true",
+                  "description": "true → trips at/after 'time'; false → ended before."
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Max trips per day (1–500)."
+                },
+                {
+                  "key": "offset",
+                  "value": "0",
+                  "description": "Trips to skip per day."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Full rail schedule for a route, grouped by day.\n\n⚠️ Rail route IDs are base64 and contain `/`, `+`, `=` — they must be percent-encoded in URLs (the samples below are)."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] Route → shapes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes/{route_id}/shapes?mode=rail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes",
+                "{route_id}",
+                "shapes"
+              ],
+              "variable": [
+                {
+                  "key": "route_id",
+                  "value": "YRqpPi4V4o91BvJfRf0mwg==",
+                  "description": "route_id (rail) — e.g. YRqpPi4V4o91BvJfRf0mwg=="
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Shape polylines for a rail route.\n\n⚠️ Rail route IDs are base64 and contain `/`, `+`, `=` — they must be percent-encoded in URLs (the samples below are)."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] Route + shape → trips",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes/{route_id}/shapes/{shape_id}/trips?mode=rail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes",
+                "{route_id}",
+                "shapes",
+                "{shape_id}",
+                "trips"
+              ],
+              "variable": [
+                {
+                  "key": "route_id",
+                  "value": "YRqpPi4V4o91BvJfRf0mwg==",
+                  "description": "route_id (rail) — e.g. YRqpPi4V4o91BvJfRf0mwg=="
+                },
+                {
+                  "key": "shape_id",
+                  "value": "shp_2_2",
+                  "description": "shape_id (rail) — e.g. shp_2_2"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Trips of a rail route using a shape.\n\n⚠️ Rail route IDs are base64 and contain `/`, `+`, `=` — they must be percent-encoded in URLs (the samples below are)."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] Trip lookup (GET)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/trips/lookup?mode=rail&route_id=YRqpPi4V4o91BvJfRf0mwg==&max_results=3",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trips",
+                "lookup"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "route_id",
+                  "value": "YRqpPi4V4o91BvJfRf0mwg==",
+                  "description": "GTFS route_id (required)."
+                },
+                {
+                  "key": "headsign",
+                  "value": "PDW",
+                  "description": "Trip headsign to match."
+                },
+                {
+                  "key": "stop_ids",
+                  "value": "PMB1",
+                  "description": "Ordered stop_ids."
+                },
+                {
+                  "key": "departure_date_time",
+                  "value": "2026-10-26T17:26:11%2B04:00",
+                  "description": "ISO datetime. Percent-encode the offset as %2B."
+                },
+                {
+                  "key": "max_results",
+                  "value": "3",
+                  "description": "Max trips (1–50)."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Find rail trips by route / headsign / stops / time."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] Trip lookup (POST)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/trips/lookup?mode=rail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trips",
+                "lookup"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "JSON-body trip lookup for rail."
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"route_id\": \"YRqpPi4V4o91BvJfRf0mwg==\",\n  \"departure_date_time\": \"2026-10-28T12:21+04:00\",\n  \"headsign\": \"PDW\",\n  \"stop_ids\": [\n    \"PMB1\"\n  ],\n  \"max_results\": 3,\n  \"departure_offset_minutes\": 5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] Trip → stop times",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/trips/{trip_id}/stop-times?mode=rail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trips",
+                "{trip_id}",
+                "stop-times"
+              ],
+              "variable": [
+                {
+                  "key": "trip_id",
+                  "value": "1AX19_20261031",
+                  "description": "trip_id (rail) — e.g. 1AX19_20261031"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Ordered stop times for a rail trip."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] Trip → stop times (both)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/trips/{trip_id}/stop-times-both?mode=rail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trips",
+                "{trip_id}",
+                "stop-times-both"
+              ],
+              "variable": [
+                {
+                  "key": "trip_id",
+                  "value": "1AX19_20261031",
+                  "description": "trip_id (rail) — e.g. 1AX19_20261031"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Stop times for a rail trip, both directions."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] Trip → shapes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/trips/{trip_id}/shapes?mode=rail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trips",
+                "{trip_id}",
+                "shapes"
+              ],
+              "variable": [
+                {
+                  "key": "trip_id",
+                  "value": "1AX19_20261031",
+                  "description": "trip_id (rail) — e.g. 1AX19_20261031"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Shape points for a rail trip."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] All shapes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/shapes?mode=rail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "shapes"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Every rail shape as GeoJSON."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] Shapes between A → B",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/shapes/between?mode=rail&start_stop_id=PMB1&end_stop_id=PDW2",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "shapes",
+                "between"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "start_stop_id",
+                  "value": "PMB1",
+                  "description": "Boarding stop_id."
+                },
+                {
+                  "key": "end_stop_id",
+                  "value": "PDW2",
+                  "description": "Alighting stop_id."
+                }
+              ],
+              "description": "Shape geometry between two rail stops."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] Serving routes (A → B)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/serving-routes?mode=rail&start_stop_id=PMB1&end_stop_id=PDW2",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "serving-routes"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "start_stop_id",
+                  "value": "PMB1",
+                  "description": "Boarding stop_id."
+                },
+                {
+                  "key": "end_stop_id",
+                  "value": "PDW2",
+                  "description": "Alighting stop_id."
+                }
+              ],
+              "description": "rail routes from the start stop to the end stop."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[rail] Departures A → B",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/departures?mode=rail&start_stop_id=PMB1&end_stop_id=PDW2&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "departures"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "start_stop_id",
+                  "value": "PMB1",
+                  "description": "Boarding stop_id."
+                },
+                {
+                  "key": "end_stop_id",
+                  "value": "PDW2",
+                  "description": "Alighting stop_id."
+                },
+                {
+                  "key": "at",
+                  "value": "14:30",
+                  "description": "ISO datetime or time, e.g. '2026-04-12T14:30' or '14:30'. Defaults to now."
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Max results to return (1–100)."
+                }
+              ],
+              "description": "rail departures from the start stop to the end stop."
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "04 · Agencies (all modes)",
+      "description": "Agency listing and filtering across all three modes.",
+      "item": [
+        {
+          "name": "Agencies: transit",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/agencies?mode=transit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agencies"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Integrated Transport Centre (ITC)"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Agencies: ferry",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/agencies?mode=ferry",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agencies"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Abu Dhabi Maritime"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Agencies: rail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/agencies?mode=rail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agencies"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Etihad Rail Mobility"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Agency filter: transit routes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes?mode=transit&agency_id=1&limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "agency_id",
+                  "value": "1",
+                  "description": "Only routes from this agency."
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Max routes."
+                }
+              ],
+              "description": "Routes filtered by agency_id."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Agency filter: ferry stops",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/gtfs-stops?mode=ferry&agency_id=AG_AD_PORTS",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "gtfs-stops"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "ferry",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "agency_id",
+                  "value": "AG_AD_PORTS",
+                  "description": "Only stops served by this agency."
+                }
+              ],
+              "description": "Stops filtered by agency_id."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Agency filter: rail routes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/routes?mode=rail&agency_id=3&limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "routes"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "rail",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "agency_id",
+                  "value": "3",
+                  "description": "Only routes from this agency."
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Max routes."
+                }
+              ],
+              "description": "Routes filtered by agency_id."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Unknown agency (expect 404)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/agencies/{agency_id}?mode=transit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "agencies",
+                "{agency_id}"
+              ],
+              "variable": [
+                {
+                  "key": "agency_id",
+                  "value": "NOPE",
+                  "description": "Deliberately invalid"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Verifies 404 for an unknown agency_id."
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "05 · OSM mapping (transit only)",
+      "description": "⚠️ Requires the `osm_stops` / `stop_osm_mapping` tables, which the current gtfs_builder.py does not create — these return 500 on a fresh build. OSM mapping is transit-only.",
+      "item": [
+        {
+          "name": "All OSM stops",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/osm-stops?mode=transit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "osm-stops"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Every OSM bus-stop node.\n\n⚠️ Requires the `osm_stops` / `stop_osm_mapping` tables, which the current gtfs_builder.py does not create — these return 500 on a fresh build. OSM mapping is transit-only."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Stop mapping",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/mapping?mode=transit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "mapping"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "GTFS stop_id → OSM node mapping.\n\n⚠️ Requires the `osm_stops` / `stop_osm_mapping` tables, which the current gtfs_builder.py does not create — these return 500 on a fresh build. OSM mapping is transit-only."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Stats",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/stats?mode=transit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "stats"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Table row counts plus matched/unmatched totals.\n\n⚠️ Requires the `osm_stops` / `stop_osm_mapping` tables, which the current gtfs_builder.py does not create — these return 500 on a fresh build. OSM mapping is transit-only."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "OSM node → routes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/osm-stops/{osm_node_id}/routes?mode=transit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "osm-stops",
+                "{osm_node_id}",
+                "routes"
+              ],
+              "variable": [
+                {
+                  "key": "osm_node_id",
+                  "value": "{{osmNodeId}}",
+                  "description": "OSM node id present in osm_stops"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "lang",
+                  "value": "ar",
+                  "description": "Language code for translations. 'ar' for Arabic; omit or 'en' for English."
+                }
+              ],
+              "description": "Routes serving the GTFS stop mapped to this OSM node.\n\n⚠️ Requires the `osm_stops` / `stop_osm_mapping` tables, which the current gtfs_builder.py does not create — these return 500 on a fresh build. OSM mapping is transit-only."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "OSM node → next departures",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/osm-stops/{osm_node_id}/next-departures?mode=transit&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "osm-stops",
+                "{osm_node_id}",
+                "next-departures"
+              ],
+              "variable": [
+                {
+                  "key": "osm_node_id",
+                  "value": "{{osmNodeId}}",
+                  "description": "OSM node id present in osm_stops"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                },
+                {
+                  "key": "at",
+                  "value": "14:30",
+                  "description": "ISO datetime or time, e.g. '2026-04-12T14:30' or '14:30'. Defaults to now."
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Max results to return (1–100)."
+                }
+              ],
+              "description": "Upcoming departures for the GTFS stop mapped to this OSM node.\n\n⚠️ Requires the `osm_stops` / `stop_osm_mapping` tables, which the current gtfs_builder.py does not create — these return 500 on a fresh build. OSM mapping is transit-only."
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "OSM node → routes (string id variant)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/osm-stops/{stop_id}/routes?mode=transit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "osm-stops",
+                "{stop_id}",
+                "routes"
+              ],
+              "variable": [
+                {
+                  "key": "stop_id",
+                  "value": "{{osmNodeId}}",
+                  "description": "OSM node id (string)"
+                }
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "transit",
+                  "description": "Which service to query: 'transit' (bus), 'ferry' (water) or 'rail'. All are served by this one API; endpoint paths are identical."
+                }
+              ],
+              "description": "Legacy variant that accepts the id as a string path segment.\n\n⚠️ Requires the `osm_stops` / `stop_osm_mapping` tables, which the current gtfs_builder.py does not create — these return 500 on a fresh build. OSM mapping is transit-only."
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:8000",
+      "type": "string"
+    },
+    {
+      "key": "mode",
+      "value": "transit",
+      "type": "string",
+      "description": "transit, ferry or rail (each request overrides it explicitly)."
+    },
+    {
+      "key": "osmNodeId",
+      "value": "1234567890",
+      "type": "string",
+      "description": "An OSM node id present in osm_stops (only for folder 05)."
+    }
+  ]
+}

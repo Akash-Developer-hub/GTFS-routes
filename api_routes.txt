@@ -1,0 +1,185 @@
+GTFS API ROUTES & PURPOSES
+================================================================================
+
+1. System & Database Overview
+--------------------------------------------------------------------------------
+GET /api/db-info
+    Purpose: Active DB verification. Returns which SQLite database is currently
+             loaded (netherlands-gtfs.sqlite), its file path, existence status,
+             total route/stop counts, and sample agencies.
+
+GET /api/regions/list
+    Purpose: Available regions list. Returns the list of dynamically discovered
+             regions with their unique identifier ('id'), display name, and database.
+             Pass 'id' or 'name' as '?region=...' in route API calls to query a
+             specific database.
+
+GET /api/gtfs-count
+    Purpose: Network summary. Quick return of total route count and total stop
+             count in the active database.
+
+GET /api/stats
+    Purpose: Basic dataset statistics and counts.
+
+
+2. Agencies (Transit Operators)
+--------------------------------------------------------------------------------
+GET /api/agencies
+    Purpose: List all transit operators/agencies in the database (e.g. Arriva,
+             Connexxion, Blauwnet, Breng, Keolis) with total routes operated.
+
+GET /api/agencies/{agency_id}
+    Purpose: Agency profile. Detailed information for a single operator including
+             agency name, website URL, timezone, language, and contact details.
+
+GET /api/agencies/{agency_id}/routes
+    Purpose: Agency routes list. All bus/train/transit lines operated by a specific
+             agency.
+
+GET /api/agencies/{agency_id}/stops
+    Purpose: Agency stops list. All physical stops/stations served by a specific
+             agency.
+
+
+3. Routes & Lines
+--------------------------------------------------------------------------------
+GET /api/routes
+    Purpose: Browse & search routes. Paginated route list supporting 'q' search
+             (by route number, line name, or destination), 'agency_id' filter,
+             start/end terminals, and intermediate stop sequences.
+
+GET /api/routes/running
+    Purpose: Active routes filter. Returns lines that have active scheduled trips
+             running at a specific date/time (e.g. ?at=now).
+
+GET /api/routes/search-hierarchy
+    Purpose: Hierarchical active routes search. Given (lat, lon), searches active
+             transit routes within 500m radius. If none are found, automatically
+             cascades to city (15km), state (60km), and country (nationwide) level,
+             returning routes with closest stop distance and agency metadata.
+
+GET /api/routes/{route_id}/stops
+    Purpose: Route stops sequence. Ordered list of stops served by a specific route
+             in travel order for each direction.
+
+GET /api/routes/{route_id}/schedule
+    Purpose: Full route timetable. Complete schedule of departure times across all
+             active service calendar days and trips for a route.
+
+
+4. Stops & Stations
+--------------------------------------------------------------------------------
+GET /api/stops
+    Purpose: Browse & search stops. Fast paginated stop search supporting 'q' text
+             matching (by stop name or code), coordinates (lat/lon), and platform
+             codes.
+
+GET /api/stops/nearby
+    Purpose: Nearby active stops with automatic fallback. Searches active stops near
+             (lat, lon) within 500m radius. If none are found, automatically cascades
+             to city, state, and country level without hardcoded regions.
+
+GET /api/stops/search-hierarchy
+    Purpose: Hierarchical active stop search. Explicitly cascades from 500m radius ->
+             city (15km) -> state (60km) -> country (nationwide) returning detailed
+             geographic hierarchy metadata (city, state, country, search level).
+
+GET /api/gtfs-stops
+    Purpose: Complete stops export. Returns stops dataset, optionally filtered by
+             agency_id.
+
+GET /api/stops/{stop_id}/routes
+    Purpose: Lines serving a stop. Finds all transit routes that call at a given
+             stop or station.
+
+GET /api/serving-routes
+    Purpose: Inter-stop route lookup. Finds routes connecting pairs or groups of
+             stops.
+
+
+5. Scheduled Departures
+--------------------------------------------------------------------------------
+GET /api/stops/{stop_id}/next-departures
+    Purpose: Station departure board. Upcoming departures from a stop with
+             destination headsigns, scheduled departure times, and countdowns.
+
+GET /api/routes/{route_id}/next-departures
+    Purpose: Route-wide departures. Next departures across all stops along a single
+             route.
+
+GET /api/routes/{route_id}/stops/{stop_id}/next-departures
+    Purpose: Targeted stop departure. Next upcoming departures for a specific route
+             at a specific stop.
+
+GET /api/stops/{stop_id}/events
+    Purpose: Stop event timeline. Chronological arrival and departure event log
+             for a stop over a time window.
+
+GET /api/departures
+    Purpose: Network-wide departures. Filterable departure lookup across the entire
+             network.
+
+
+6. Trips & Stop Times
+--------------------------------------------------------------------------------
+GET /api/trips/{trip_id}/stop-times
+    Purpose: Trip run sheet. Complete ordered timetable of scheduled arrival and
+             departure times at every stop for a single vehicle trip.
+
+GET /api/trips/lookup
+POST /api/trips/lookup
+    Purpose: Batch trip details. Retrieve metadata, headsign, route_id, and
+             direction for one or multiple trip IDs.
+
+
+7. Map Geometry & Shapes
+--------------------------------------------------------------------------------
+GET /api/routes/{route_id}/shapes
+    Purpose: Route map polyline. GPS coordinate track points (lat, lon, sequence)
+             used to draw route lines on a map.
+
+GET /api/trips/{trip_id}/shapes
+    Purpose: Trip path polyline. GPS track coordinates for the specific path of
+             a single trip.
+
+GET /api/shapes
+    Purpose: Browse shape paths. Lists shape IDs and coordinate arrays.
+
+GET /api/shapes/between
+    Purpose: Stop-to-stop geometry. Polyline path connecting two specific stops.
+
+
+
+8. GTFS-Realtime (Live Feeds & Index-based Fetching)
+--------------------------------------------------------------------------------
+GET /api/realtime/status
+    Purpose: Feed health & cache diagnostics. Reports overall health, cache engine
+             (redis or in-memory), last attempt, last success, cache age, entity
+             counts, and error counts across tripUpdates, trainUpdates,
+             vehiclePositions, and alerts.
+
+GET /api/realtime/routes/{route_id}
+    Purpose: Route-indexed realtime data. Returns all active trip delay updates,
+             live vehicle positions, and service alerts affecting this route.
+
+GET /api/realtime/trips/{trip_id}
+    Purpose: Trip-indexed realtime data. Returns current delay, arrival/departure
+             predictions across stop sequences, and current vehicle position for
+             a single trip.
+
+GET /api/realtime/stops/{stop_id}
+    Purpose: Stop-indexed realtime data. Returns upcoming vehicle arrivals,
+             departures, delays, and active service alerts calling at this stop.
+
+GET /api/realtime/trip-updates
+    Purpose: Filtered trip updates. Returns cached delays and predictions with
+             optional filtering by route_id, trip_id, stop_id, and feed
+             (all, bus, train).
+
+GET /api/realtime/vehicle-positions
+    Purpose: Filtered live vehicle positions. Returns cached GPS positions with
+             optional filtering by route_id, vehicle_id, or bounding box (bbox).
+
+GET /api/realtime/alerts
+    Purpose: Filtered service alerts. Returns active service alerts with optional
+             filtering by route_id, stop_id, and active_only flag.

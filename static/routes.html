@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GTFS Map — Transit &amp; Ferry</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  :root {
+    --bg: #0f172a;
+    --panel: #111c33;
+    --panel-2: #16233d;
+    --line: #24344f;
+    --text: #e6edf7;
+    --muted: #8fa3c0;
+    --accent: #38bdf8;
+    --bus: #00a7bf;
+    --ferry: #f61826;
+    --rail: #a855f7;
+    --ok: #22c55e;
+    --warn: #f59e0b;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text); overflow: hidden;
+  }
+  #app { display: flex; height: 100vh; }
+
+  /* ── Sidebar ─────────────────────────────────────────────── */
+  #sidebar {
+    width: 380px; min-width: 380px; display: flex; flex-direction: column;
+    background: var(--panel); border-right: 1px solid var(--line); z-index: 1000;
+  }
+  #sidebar.collapsed { display: none; }
+  .head { padding: 14px 16px 10px; border-bottom: 1px solid var(--line); }
+  .head h1 { font-size: 15px; margin: 0 0 10px; letter-spacing: .3px; }
+  .head h1 span { color: var(--accent); }
+
+  .modes { display: flex; gap: 6px; margin-bottom: 10px; }
+  .modes button {
+    flex: 1; padding: 8px 6px; border-radius: 8px; cursor: pointer;
+    background: var(--panel-2); color: var(--muted); border: 1px solid var(--line);
+    font-size: 13px; font-weight: 600; transition: .15s;
+  }
+  .modes button:hover { color: var(--text); border-color: #33507a; }
+  .modes button.active { background: #1d3a5c; color: #fff; border-color: var(--accent); }
+  .modes button .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .modes button[data-mode="transit"] .dot { background: var(--bus); }
+  .modes button[data-mode="ferry"] .dot { background: var(--ferry); }
+  .modes button[data-mode="rail"] .dot { background: var(--rail); }
+
+  .search { position: relative; }
+  .search input {
+    width: 100%; padding: 9px 32px 9px 11px; border-radius: 8px;
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    font-size: 13px; outline: none;
+  }
+  .search input:focus { border-color: var(--accent); }
+  .search .clear {
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 16px;
+    display: none; padding: 0 4px;
+  }
+
+  .toolbar { display: flex; gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+  .toolbar button {
+    flex: 1; padding: 6px; font-size: 12px; border-radius: 6px; cursor: pointer;
+    background: none; color: var(--muted); border: 1px solid var(--line);
+  }
+  .toolbar button:hover { color: var(--text); border-color: #33507a; }
+
+  .basemap-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 16px 9px; border-bottom: 1px solid var(--line);
+  }
+  .basemap-row label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  .basemap-row select {
+    flex: 1; padding: 5px 7px; font-size: 12px; border-radius: 6px;
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    outline: none; cursor: pointer;
+  }
+  .basemap-row select:focus { border-color: var(--accent); }
+
+  .list { flex: 1; overflow-y: auto; }
+  .list::-webkit-scrollbar { width: 8px; }
+  .list::-webkit-scrollbar-thumb { background: #2a3d5c; border-radius: 4px; }
+
+  .route {
+    display: flex; align-items: center; gap: 10px; padding: 9px 16px;
+    cursor: pointer; border-bottom: 1px solid rgba(36,52,79,.55);
+  }
+  .route:hover { background: var(--panel-2); }
+  .route.selected { background: #1b2f4d; }
+  .badge {
+    min-width: 46px; text-align: center; padding: 3px 7px; border-radius: 5px;
+    font-weight: 700; font-size: 12px; color: #fff; flex-shrink: 0;
+  }
+  .route .meta { min-width: 0; flex: 1; }
+  .route .name {
+    font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .route .sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .route .eye { color: var(--muted); font-size: 15px; padding: 2px 4px; border-radius: 4px; }
+  .route .eye:hover { color: var(--accent); background: #1d3a5c; }
+
+  .empty { padding: 26px 16px; color: var(--muted); text-align: center; font-size: 13px; }
+  .loading { padding: 26px 16px; color: var(--muted); text-align: center; font-size: 13px; }
+
+  /* ── Detail panel ────────────────────────────────────────── */
+  #detail {
+    position: absolute; right: 14px; top: 14px; width: 340px; max-height: calc(100vh - 28px);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.45); z-index: 1001; display: none;
+    flex-direction: column; overflow: hidden;
+  }
+  #detail.open { display: flex; }
+  .d-head { padding: 12px 14px; border-bottom: 1px solid var(--line); display: flex; gap: 10px; align-items: flex-start; }
+  .d-head .t { flex: 1; min-width: 0; }
+  .d-head h2 { margin: 0; font-size: 14px; }
+  .d-head .s { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .d-close { background: none; border: 0; color: var(--muted); font-size: 20px; cursor: pointer; line-height: 1; }
+  .d-close:hover { color: #fff; }
+  .d-body { overflow-y: auto; padding: 4px 0 12px; }
+  .d-sec { padding: 8px 14px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+  .stop-row { display: flex; gap: 8px; padding: 5px 14px; font-size: 12px; align-items: baseline; }
+  .stop-row .seq { color: var(--muted); min-width: 18px; font-variant-numeric: tabular-nums; }
+  .stop-row .nm { flex: 1; }
+  .trip-row { padding: 5px 14px; font-size: 12px; display: flex; gap: 8px; }
+  .trip-row .tm { font-variant-numeric: tabular-nums; color: var(--accent); min-width: 58px; }
+  .dir-tabs { display: flex; gap: 4px; padding: 8px 14px 2px; flex-wrap: wrap; }
+  .dir-tabs button {
+    flex: 1 1 30%; min-width: 92px; padding: 5px; font-size: 11px; border-radius: 6px; cursor: pointer;
+    background: var(--panel-2); color: var(--muted); border: 1px solid var(--line);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .dir-tabs button.active { background: #1d3a5c; color: #fff; border-color: var(--accent); }
+
+  .shape-box {
+    margin: 6px 14px 4px; border: 1px solid var(--line); border-radius: 8px;
+    background: #0b1220; overflow: hidden;
+  }
+  .shape-svg { display: block; width: 100%; height: 120px; }
+  .shape-meta {
+    display: flex; justify-content: space-between; gap: 8px;
+    padding: 4px 8px; font-size: 10px; color: var(--muted);
+    border-top: 1px solid var(--line);
+    white-space: nowrap; overflow: hidden;
+  }
+  .shape-meta span { overflow: hidden; text-overflow: ellipsis; }
+
+  /* ── Map ─────────────────────────────────────────────────── */
+  #map { flex: 1; position: relative; background: #0b1220; }
+  .leaflet-container { background: #0b1220; }
+
+  #toggle {
+    position: absolute; left: 12px; top: 12px; z-index: 1002;
+    background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 11px; cursor: pointer; font-size: 13px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.4);
+  }
+  #toggle:hover { border-color: var(--accent); }
+
+  #status {
+    position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%);
+    background: rgba(17,28,51,.95); border: 1px solid var(--line); color: var(--text);
+    padding: 7px 14px; border-radius: 20px; font-size: 12px; z-index: 1002;
+    display: none; white-space: nowrap;
+  }
+  #status.show { display: block; }
+  #status.err { border-color: #7f1d1d; color: #fecaca; }
+
+  .stop-pop b { display: block; margin-bottom: 3px; }
+  .stop-pop .muted { color: #64748b; font-size: 11px; }
+  .stop-pop .routes { margin-top: 6px; font-size: 12px; }
+  .stop-pop .routes span {
+    display: inline-block; padding: 1px 6px; margin: 2px 3px 0 0;
+    border-radius: 4px; color: #fff; font-size: 11px; font-weight: 600;
+  }
+
+  @media (max-width: 820px) {
+    #sidebar { width: 100%; min-width: 0; position: absolute; height: 100%; }
+    #detail { width: calc(100% - 28px); }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div class="head">
+      <h1>GTFS Map <span>· Transit &amp; Ferry</span></h1>
+      <div class="modes">
+        <button data-mode="transit" class="active"><span class="dot"></span>Bus</button>
+        <button data-mode="ferry"><span class="dot"></span>Ferry</button>
+        <button data-mode="rail"><span class="dot"></span>Rail</button>
+      </div>
+      <div class="search">
+        <input id="q" type="search" placeholder="Search routes or headsigns…" autocomplete="off" />
+        <button class="clear" id="qclear" title="Clear">×</button>
+      </div>
+    </div>
+    <div class="toolbar">
+      <button id="showAll" title="Draw every route on the map">Show all</button>
+      <button id="clearAll" title="Remove all routes from the map">Clear map</button>
+      <button id="fitAll" title="Zoom to all stops">Fit stops</button>
+    </div>
+    <div class="basemap-row">
+      <label for="agency">Agency</label>
+      <select id="agency" title="Filter routes and stops by agency">
+        <option value="">All agencies</option>
+      </select>
+    </div>
+    <div class="basemap-row">
+      <label for="basemap">Basemap</label>
+      <select id="basemap" title="Free OpenStreetMap basemap">
+        <option value="osm">OSM Standard</option>
+        <option value="de">OSM Germany</option>
+        <option value="topo">OpenTopoMap</option>
+      </select>
+    </div>
+    <div class="list" id="list"><div class="loading">Loading routes…</div></div>
+  </aside>
+
+  <div id="map">
+    <button id="toggle" title="Toggle sidebar">☰</button>
+    <div id="status"></div>
+    <section id="detail">
+      <div class="d-head">
+        <span class="badge" id="dBadge">—</span>
+        <div class="t">
+          <h2 id="dName">—</h2>
+          <div class="s" id="dSub"></div>
+        </div>
+        <button class="d-close" id="dClose" title="Close">×</button>
+      </div>
+      <div class="d-body" id="dBody"></div>
+    </section>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+"use strict";
+
+// ── Config ───────────────────────────────────────────────────────────────────
+const API = window.location.origin;
+const MODE_LABEL = { transit: "Bus", ferry: "Ferry", rail: "Rail" };
+const FALLBACK_COLOR = { transit: "#00a7bf", ferry: "#f61826", rail: "#a855f7" };
+const MAX_ALL_ROUTES = 500;
+
+// ── State ────────────────────────────────────────────────────────────────────
+const state = {
+  mode: "transit",
+  agencyId: "",        // "" = all agencies
+  agencies: [],
+  routes: [],          // route objects for current mode
+  filter: "",
+  selectedId: null,    // route open in the detail panel
+  layers: new Map(),   // route_id -> { group, visible }
+  stopsLayer: null,
+  directions: null,    // last /stops payload for selected route
+  activeDirection: 0,
+};
+
+// ── Map ──────────────────────────────────────────────────────────────────────
+const map = L.map("map", { zoomControl: true, preferCanvas: true })
+  .setView([24.45, 54.4], 10);
+
+// Free, open-source basemaps (OpenStreetMap community tile servers).
+// No API key, no billing. See https://wiki.openstreetmap.org/wiki/Tile_servers
+const BASEMAPS = {
+  osm: {
+    name: "OSM Standard",
+    url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    options: {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      maxZoom: 19,
+    },
+  },
+  de: {
+    name: "OSM Germany",
+    url: "https://tile.openstreetmap.de/{z}/{x}/{y}.png",
+    options: {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, '
+        + 'Tiles: <a href="https://openstreetmap.de/">OSM Germany</a>',
+      maxZoom: 18,
+    },
+  },
+  topo: {
+    name: "OpenTopoMap",
+    url: "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+    options: {
+      attribution: 'Map data &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, '
+        + 'SRTM | Style &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)',
+      subdomains: "abc",
+      maxZoom: 17,
+    },
+  },
+};
+
+let currentBasemap = null;
+
+function setBasemap(key) {
+  const def = BASEMAPS[key] || BASEMAPS.osm;
+  if (currentBasemap) map.removeLayer(currentBasemap);
+  currentBasemap = L.tileLayer(def.url, def.options).addTo(map);
+  currentBasemap.setZIndex(0);
+  const sel = document.getElementById("basemap");
+  if (sel && sel.value !== key) sel.value = key;
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const $ = (id) => document.getElementById(id);
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function colorOf(route) {
+  const c = (route.route_color || "").trim();
+  return /^#?[0-9a-f]{6}$/i.test(c) ? (c.startsWith("#") ? c : "#" + c) : FALLBACK_COLOR[state.mode];
+}
+
+function textColorOf(route) {
+  const c = (route.route_text_color || "").trim();
+  return /^#?[0-9a-f]{6}$/i.test(c) ? (c.startsWith("#") ? c : "#" + c) : "#fff";
+}
+
+function label(route) {
+  return route.route_short_name || route.route_long_name || route.route_id;
+}
+
+function status(msg, isError = false) {
+  const el = $("status");
+  if (!msg) { el.classList.remove("show"); return; }
+  el.textContent = msg;
+  el.classList.toggle("err", isError);
+  el.classList.add("show");
+}
+
+async function api(path, params = {}) {
+  const qs = new URLSearchParams({ mode: state.mode, ...params });
+  const res = await fetch(`${API}${path}?${qs}`);
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { detail = (await res.json()).detail || detail; } catch (_) {}
+    throw new Error(`${path} → ${res.status} ${detail}`);
+  }
+  return res.json();
+}
+
+// ── Route list ───────────────────────────────────────────────────────────────
+async function loadAgencies() {
+  const sel = $("agency");
+  try {
+    const data = await api("/api/agencies");
+    state.agencies = data.agencies || [];
+  } catch (_) {
+    state.agencies = [];
+  }
+  // Keep the selection if it still exists in this mode.
+  if (state.agencyId && !state.agencies.some((a) => a.agency_id === state.agencyId)) {
+    state.agencyId = "";
+  }
+  sel.innerHTML = '<option value="">All agencies</option>' + state.agencies.map((a) =>
+    `<option value="${esc(a.agency_id)}">${esc(a.agency_name)} (${a.route_count})</option>`
+  ).join("");
+  sel.value = state.agencyId;
+}
+
+async function loadRoutes() {
+  $("list").innerHTML = '<div class="loading">Loading routes…</div>';
+  try {
+    const params = { limit: "500" };
+    if (state.agencyId) params.agency_id = state.agencyId;
+    const data = await api("/api/routes", params);
+    state.routes = data.routes || [];
+    renderList();
+  } catch (err) {
+    $("list").innerHTML = `<div class="empty">Could not load routes.<br><small>${esc(err.message)}</small></div>`;
+  }
+}
+
+function renderList() {
+  const f = state.filter.toLowerCase();
+  const rows = state.routes.filter((r) => {
+    if (!f) return true;
+    return (r.route_short_name || "").toLowerCase().includes(f)
+      || (r.route_long_name || "").toLowerCase().includes(f)
+      || (r.route_id || "").toLowerCase().includes(f)
+      || (r.headsigns || []).some((h) => h.toLowerCase().includes(f));
+  });
+
+  if (!rows.length) {
+    $("list").innerHTML = `<div class="empty">No ${MODE_LABEL[state.mode].toLowerCase()} routes match “${esc(state.filter)}”.</div>`;
+    return;
+  }
+
+  $("list").innerHTML = rows.map((r) => {
+    const on = state.layers.get(r.route_id)?.visible;
+    const heads = (r.headsigns || []).slice(0, 2).join(" · ");
+    return `<div class="route ${state.selectedId === r.route_id ? "selected" : ""}" data-id="${esc(r.route_id)}">
+      <span class="badge" style="background:${colorOf(r)};color:${textColorOf(r)}">${esc(label(r))}</span>
+      <div class="meta">
+        <div class="name">${esc(r.route_long_name || r.route_id)}</div>
+        <div class="sub">${esc(heads || r.route_id)}</div>
+      </div>
+      <span class="eye" data-act="toggle" title="${on ? "Hide" : "Show"} on map">${on ? "◉" : "◎"}</span>
+    </div>`;
+  }).join("");
+}
+
+// ── Route layers ─────────────────────────────────────────────────────────────
+async function toggleRoute(routeId, force) {
+  const entry = state.layers.get(routeId);
+  if (entry) {
+    const show = force !== undefined ? force : !entry.visible;
+    if (show) entry.group.addTo(map); else map.removeLayer(entry.group);
+    entry.visible = show;
+    renderList();
+    return show;
+  }
+
+  const route = state.routes.find((r) => r.route_id === routeId);
+  status(`Loading ${label(route || { route_id: routeId })}…`);
+  try {
+    const fc = await api(`/api/routes/${encodeURIComponent(routeId)}/shapes`);
+    const color = colorOf(route || {});
+    const group = L.featureGroup();
+    (fc.features || []).forEach((feat) => {
+      const geom = feat.geometry || {};
+      const p = feat.properties || {};
+      const tip =
+        `<b>${esc(p.route_short_name || routeId)}</b> ${esc(p.segment || "")}<br>` +
+        `${esc(p.trip_headsign || "")}<br><small>${esc(p.shape_id || "")}</small>`;
+
+      if (geom.type === "LineString" && Array.isArray(geom.coordinates)) {
+        const latlngs = geom.coordinates
+          .filter((c) => Array.isArray(c) && c.length >= 2)
+          .map(([lon, lat]) => [lat, lon]);
+        if (latlngs.length < 2) return;
+        const line = L.polyline(latlngs, {
+          color, weight: 4, opacity: 0.9, lineJoin: "round",
+          dashArray: p.direction_id === "1" ? "8 6" : null,
+        });
+        line.bindTooltip(tip, { sticky: true });
+        group.addLayer(line);
+      } else if (geom.type === "Point" && Array.isArray(geom.coordinates)) {
+        // Degenerate shape (single coordinate) — show a dot so the route is visible.
+        const [lon, lat] = geom.coordinates;
+        const dot = L.circleMarker([lat, lon], {
+          radius: 5, color, weight: 2, fillColor: color, fillOpacity: 0.8,
+        });
+        dot.bindTooltip(tip, { sticky: true });
+        group.addLayer(dot);
+      }
+    });
+    // Some feeds (notably rail) ship no shapes.txt. Fall back to connecting
+    // the route's stops in sequence so the route is still visible on the map.
+    if (!group.getLayers().length) {
+      status(`No shape data for ${label(route || { route_id: routeId })} — drawing stops…`);
+      const stopsData = await api(`/api/routes/${encodeURIComponent(routeId)}/stops`);
+      const dirs = stopsData.directions || [];
+      const color = colorOf(route || {});
+      dirs.forEach((d) => {
+        const pts = (d.stops || [])
+          .filter((st) => st.lat != null && st.lon != null)
+          .map((st) => [st.lat, st.lon]);
+        if (pts.length < 2) return;
+        const line = L.polyline(pts, {
+          color, weight: 3, opacity: 0.85, dashArray: "6 5", lineJoin: "round",
+        });
+        line.bindTooltip(
+          `<b>${esc(label(route || {}))}</b> ${esc(d.trip_headsign || "")}<br>` +
+          `<small>stop sequence (no shape data)</small>`,
+          { sticky: true }
+        );
+        group.addLayer(line);
+        pts.forEach((pt, i) => {
+          group.addLayer(L.circleMarker(pt, {
+            radius: i === 0 || i === pts.length - 1 ? 5 : 3,
+            color: "#0b1220", weight: 1.5,
+            fillColor: i === 0 ? "#22c55e" : (i === pts.length - 1 ? "#f59e0b" : color),
+            fillOpacity: 1,
+          }));
+        });
+      });
+      if (!group.getLayers().length) throw new Error("No shape or stop data for this route");
+    }
+
+    group.addTo(map);
+    state.layers.set(routeId, { group, visible: true });
+    status("");
+    renderList();
+    return true;
+  } catch (err) {
+    status(err.message, true);
+    setTimeout(() => status(""), 4000);
+    return false;
+  }
+}
+
+function removeRoute(routeId) {
+  const entry = state.layers.get(routeId);
+  if (!entry) return;
+  map.removeLayer(entry.group);
+  state.layers.delete(routeId);
+}
+
+// Show only *routeId* on the map: every other route layer is removed first,
+// so selecting a route replaces the previous selection instead of stacking.
+function showOnlyRoute(routeId) {
+  [...state.layers.keys()].forEach((id) => {
+    if (id !== routeId) removeRoute(id);
+  });
+}
+
+function clearMap() {
+  state.layers.forEach((e) => map.removeLayer(e.group));
+  state.layers.clear();
+  if (state.stopsLayer) { map.removeLayer(state.stopsLayer); state.stopsLayer = null; }
+  closeDetail();
+  renderList();
+}
+
+async function showAll() {
+  const routes = state.routes.slice(0, MAX_ALL_ROUTES);
+  if (!routes.length) return;
+  status(`Drawing ${routes.length} routes…`);
+  let done = 0;
+  for (const r of routes) {
+    if (!state.layers.get(r.route_id)?.visible) {
+      await toggleRoute(r.route_id, true);
+    }
+    done++;
+    if (done % 10 === 0) status(`Drawing routes… ${done}/${routes.length}`);
+  }
+  status(`Showing ${state.layers.size} routes`);
+  setTimeout(() => status(""), 2500);
+  fitToLayers();
+}
+
+function fitToLayers() {
+  const groups = [...state.layers.values()].filter((e) => e.visible).map((e) => e.group);
+  if (!groups.length) return;
+  const bounds = L.featureGroup(groups).getBounds();
+  if (bounds.isValid()) map.fitBounds(bounds, { padding: [30, 30] });
+}
+
+// ── Stops ────────────────────────────────────────────────────────────────────
+async function loadStops() {
+  if (state.stopsLayer) { map.removeLayer(state.stopsLayer); state.stopsLayer = null; }
+  const stops = await api("/api/gtfs-stops");
+  const layer = L.layerGroup();
+  const isFerry = state.mode === "ferry";
+
+  stops.forEach((s) => {
+    if (s.lat == null || s.lon == null) return;
+    const marker = L.circleMarker([s.lat, s.lon], {
+      radius: isFerry ? 6 : 3.5,
+      color: "#0b1220", weight: 1,
+      fillColor: isFerry ? "#f61826" : "#38bdf8", fillOpacity: 0.95,
+    });
+    marker.bindPopup(
+      `<div class="stop-pop"><b>${esc(s.stop_name)}</b>
+        <span class="muted">${esc(s.stop_id)}${s.stop_code ? " · " + esc(s.stop_code) : ""}</span>
+        <div class="routes" id="pop-${esc(s.stop_id)}"></div></div>`
+    );
+    marker.on("popupopen", () => loadStopRoutes(s.stop_id));
+    layer.addLayer(marker);
+  });
+
+  layer.addTo(map);
+  state.stopsLayer = layer;
+  return stops;
+}
+
+async function loadStopRoutes(stopId) {
+  const box = document.getElementById(`pop-${stopId}`);
+  if (!box) return;
+  box.textContent = "…";
+  try {
+    const data = await api(`/api/stops/${encodeURIComponent(stopId)}/routes`);
+    const routes = data.routes || data || [];
+    box.innerHTML = routes.length
+      ? routes.map((r) => {
+          const c = colorOf(r);
+          return `<span style="background:${c};color:${textColorOf(r)}" title="${esc(r.route_long_name || "")}">${esc(label(r))}</span>`;
+        }).join("")
+      : '<span style="color:#64748b">No routes</span>';
+  } catch (_) {
+    box.innerHTML = '<span style="color:#64748b">—</span>';
+  }
+}
+
+async function fitStops() {
+  status("Loading stops…");
+  try {
+    const stops = await loadStops();
+    const pts = stops.filter((s) => s.lat != null).map((s) => [s.lat, s.lon]);
+    if (pts.length) map.fitBounds(L.latLngBounds(pts), { padding: [30, 30] });
+    status(`${stops.length} stops`);
+    setTimeout(() => status(""), 2500);
+  } catch (err) {
+    status(err.message, true);
+    setTimeout(() => status(""), 4000);
+  }
+}
+
+// ── Detail panel ─────────────────────────────────────────────────────────────
+async function openDetail(routeId) {
+  const route = state.routes.find((r) => r.route_id === routeId);
+  if (!route) return;
+  state.selectedId = routeId;
+  state.activeDirection = 0;
+  renderList();
+
+  $("dBadge").textContent = label(route);
+  $("dBadge").style.background = colorOf(route);
+  $("dBadge").style.color = textColorOf(route);
+  $("dName").textContent = route.route_long_name || route.route_id;
+  $("dSub").textContent = `${MODE_LABEL[state.mode]} · ${route.route_id}`;
+  $("dBody").innerHTML = '<div class="loading">Loading…</div>';
+  $("detail").classList.add("open");
+
+  try {
+    // Selecting a route replaces any previously shown route on the map.
+    showOnlyRoute(routeId);
+    // Draw the route shape on the map as soon as it is opened.
+    const [stopsData, sched] = await Promise.all([
+      api(`/api/routes/${encodeURIComponent(routeId)}/stops`),
+      api(`/api/routes/${encodeURIComponent(routeId)}/schedule`, { filter: "today", limit: "50" })
+        .catch(() => null),
+      toggleRoute(routeId, true).then(() => fitToRoute(routeId)),
+    ]);
+    state.directions = stopsData.directions || [];
+    renderDetail(route, sched);
+  } catch (err) {
+    $("dBody").innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+  }
+}
+
+function fitToRoute(routeId) {
+  const entry = state.layers.get(routeId);
+  if (!entry) return;
+  const bounds = entry.group.getBounds();
+  if (bounds.isValid()) map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
+}
+
+function renderDetail(route, sched) {
+  const dirs = state.directions;
+  const di = Math.min(state.activeDirection, Math.max(dirs.length - 1, 0));
+  const dir = dirs[di];
+  let html = "";
+
+  if (dirs.length > 1) {
+    html += `<div class="dir-tabs">` + dirs.map((d, i) => {
+      // The API returns one entry per shape variant, not per direction, so
+      // label each tab by its headsign (and shape when headsigns repeat).
+      const sameHeadsign = dirs.filter((x) => x.trip_headsign === d.trip_headsign).length;
+      const hs = (d.trip_headsign || "").replace(/</g, "‹");
+      const short = hs.length > 18 ? hs.slice(0, 17) + "…" : hs;
+      const text = sameHeadsign > 1
+        ? `${d.direction_id === "1" ? "In" : "Out"} · ${esc(d.shape_id || "")}`
+        : short || (d.direction_id === "1" ? "Inbound" : "Outbound");
+      return `<button data-dir="${i}" class="${i === di ? "active" : ""}"
+                title="${esc(d.trip_headsign || "")} · ${esc(d.shape_id || "")}">
+                ${esc(text)}</button>`;
+    }).join("") + `</div>`;
+  }
+
+  if (dir) {
+    const shapeId = dir.shape_id || "";
+    html += `<div class="d-sec">Shape</div>
+      <div class="shape-box">
+        <svg class="shape-svg" data-shape="${esc(shapeId)}" viewBox="0 0 300 120" preserveAspectRatio="xMidYMid meet">
+          <text x="150" y="64" text-anchor="middle" fill="#64748b" font-size="11">Loading shape…</text>
+        </svg>
+        <div class="shape-meta">
+          <span>${esc(shapeId || "no shape")}</span>
+          <span>${dir.direction_id === "1" ? "Inbound" : "Outbound"}</span>
+        </div>
+      </div>`;
+    html += `<div class="d-sec">${esc(dir.trip_headsign || "")} · ${dir.stops.length} stops</div>`;
+    html += dir.stops.map((s) =>
+      `<div class="stop-row"><span class="seq">${esc(s.stop_sequence)}</span>
+        <span class="nm">${esc(s.stop_name)}</span></div>`).join("");
+  } else {
+    html += '<div class="empty">No stop data</div>';
+  }
+
+  const day = sched?.days?.[0];
+  if (day?.trips?.length) {
+    html += `<div class="d-sec">Today · ${esc(day.day_name)} (${day.total} trips)</div>`;
+    html += day.trips.slice(0, 25).map((t) =>
+      `<div class="trip-row"><span class="tm">${esc((t.first_departure || "").slice(0, 5))}</span>
+        <span>${esc(t.start_stop_name || "")} → ${esc(t.end_stop_name || "")}</span></div>`).join("");
+    if (day.total > 25) html += `<div class="stop-row"><span class="nm" style="color:#64748b">+${day.total - 25} more…</span></div>`;
+  } else if (sched) {
+    html += '<div class="d-sec">Today</div><div class="empty">No trips today</div>';
+  }
+
+  $("dBody").innerHTML = html;
+  $("dBody").querySelectorAll("[data-dir]").forEach((btn) => {
+    btn.onclick = () => { state.activeDirection = +btn.dataset.dir; renderDetail(route, sched); };
+  });
+
+  // Draw the mini shape preview for the selected variant.
+  const svg = $("dBody").querySelector(".shape-svg");
+  if (svg) drawShapePreview(svg, route, dir?.shape_id, dir?.stops || []);
+}
+
+// ── Shape preview (inline SVG in the detail panel) ───────────────────────────
+function drawShapePreview(svg, route, shapeId, stops = []) {
+  const color = colorOf(route);
+  const W = 300, H = 120, PAD = 10;
+
+  // Feeds without shapes.txt (e.g. rail) have no geometry: draw the stop
+  // sequence instead so the panel still shows the route's path.
+  const drawStopFallback = () => {
+    const pts = stops
+      .filter((st) => st.lat != null && st.lon != null)
+      .map((st) => [st.lon, st.lat]);
+    renderPreview(svg, pts, color, W, H, PAD, "stop sequence (no shape data)");
+  };
+
+  api(`/api/routes/${encodeURIComponent(route.route_id)}/shapes`)
+    .then((fc) => {
+      // Prefer the feature matching the selected shape_id.
+      const feats = (fc.features || []).filter((f) => f.geometry);
+      const match = feats.filter((f) => f.properties?.shape_id === shapeId);
+      const use = match.length ? match : feats;
+      const pts = [];
+      use.forEach((f) => {
+        if (f.geometry.type === "LineString" && Array.isArray(f.geometry.coordinates)) {
+          f.geometry.coordinates.forEach((c) => {
+            if (Array.isArray(c) && c.length >= 2) pts.push([c[0], c[1]]);
+          });
+        } else if (f.geometry.type === "Point" && Array.isArray(f.geometry.coordinates)) {
+          pts.push(f.geometry.coordinates);
+        }
+      });
+
+      if (!pts.length) {
+        drawStopFallback();
+        return;
+      }
+      renderPreview(svg, pts, color, W, H, PAD);
+    })
+    .catch(drawStopFallback);
+}
+
+// Project [lon,lat] points into the SVG viewBox and draw the polyline.
+function renderPreview(svg, pts, color, W, H, PAD, note) {
+  if (!pts || pts.length < 2) {
+    svg.innerHTML = `<text x="150" y="64" text-anchor="middle" fill="#64748b" font-size="11">No geometry</text>`;
+    return;
+  }
+
+  const lons = pts.map((p) => p[0]), lats = pts.map((p) => p[1]);
+  const minLon = Math.min(...lons), maxLon = Math.max(...lons);
+  const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+  const spanLon = maxLon - minLon || 1e-6;
+  const spanLat = maxLat - minLat || 1e-6;
+  const scale = Math.min((W - PAD * 2) / spanLon, (H - PAD * 2) / spanLat);
+  const offX = (W - spanLon * scale) / 2;
+  const offY = (H - spanLat * scale) / 2;
+  const project = ([lon, lat]) => [
+    offX + (lon - minLon) * scale,
+    H - offY - (lat - minLat) * scale,
+  ];
+
+  const d = pts.map((p, i) => {
+    const [x, y] = project(p);
+    return `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+
+  const start = project(pts[0]);
+  const end = project(pts[pts.length - 1]);
+  svg.innerHTML = `
+    <path d="${d}" fill="none" stroke="${color}" stroke-width="2.5"
+          stroke-linejoin="round" stroke-linecap="round" opacity="0.95"
+          ${note ? 'stroke-dasharray="6 4"' : ""}/>
+    <circle cx="${start[0].toFixed(1)}" cy="${start[1].toFixed(1)}" r="3.5"
+            fill="#22c55e" stroke="#0b1220" stroke-width="1.5"/>
+    <circle cx="${end[0].toFixed(1)}" cy="${end[1].toFixed(1)}" r="3.5"
+            fill="#f59e0b" stroke="#0b1220" stroke-width="1.5"/>
+    ${note ? `<text x="${W / 2}" y="${H - 4}" text-anchor="middle" fill="#64748b" font-size="9">${esc(note)}</text>` : ""}`;
+}
+
+function closeDetail() {
+  state.selectedId = null;
+  $("detail").classList.remove("open");
+  renderList();
+}
+
+// ── Mode switching ───────────────────────────────────────────────────────────
+async function setMode(mode) {
+  if (state.mode === mode) return;
+  state.mode = mode;
+  state.filter = "";
+  $("q").value = "";
+  $("qclear").style.display = "none";
+  document.querySelectorAll(".modes button").forEach((b) =>
+    b.classList.toggle("active", b.dataset.mode === mode));
+
+  clearMap();
+  await loadAgencies();
+  await loadRoutes();
+  fitStops();
+}
+
+// ── Events ───────────────────────────────────────────────────────────────────
+$("list").addEventListener("click", (ev) => {
+  const row = ev.target.closest(".route");
+  if (!row) return;
+  const id = row.dataset.id;
+  if (ev.target.dataset.act === "toggle") {
+    const entry = state.layers.get(id);
+    if (entry && entry.visible) {
+      // Hide it.
+      toggleRoute(id, false);
+    } else {
+      // Showing a route replaces whatever was on the map.
+      showOnlyRoute(id);
+      toggleRoute(id, true).then(() => fitToRoute(id));
+    }
+    return;
+  }
+  openDetail(id);
+});
+
+document.querySelectorAll(".modes button").forEach((b) => {
+  b.onclick = () => setMode(b.dataset.mode);
+});
+
+$("q").addEventListener("input", (e) => {
+  state.filter = e.target.value.trim();
+  $("qclear").style.display = state.filter ? "block" : "none";
+  renderList();
+});
+$("qclear").onclick = () => {
+  $("q").value = ""; state.filter = ""; $("qclear").style.display = "none"; renderList();
+};
+
+$("showAll").onclick = showAll;
+$("clearAll").onclick = clearMap;
+$("fitAll").onclick = fitStops;
+$("basemap").onchange = (e) => setBasemap(e.target.value);
+$("agency").onchange = async (e) => {
+  state.agencyId = e.target.value;
+  clearMap();
+  await loadRoutes();
+  fitStops();
+};
+$("dClose").onclick = closeDetail;
+$("toggle").onclick = () => {
+  $("sidebar").classList.toggle("collapsed");
+  setTimeout(() => map.invalidateSize(), 60);
+};
+
+// ── Boot ─────────────────────────────────────────────────────────────────────
+setBasemap("osm");
+
+(async function boot() {
+  await loadAgencies();
+  await loadRoutes();
+  fitStops();
+})();
+</script>
+</body>
+</html>

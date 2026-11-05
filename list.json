@@ -1,0 +1,1251 @@
+{
+    "success": true,
+    "level": "radius_500m",
+    "searched_levels": [
+        "radius_500m"
+    ],
+    "search_radius_meters": 500.0,
+    "location": {
+        "lat": 52.379189,
+        "lon": 4.899431
+    },
+    "geo": {
+        "city": "Amsterdam",
+        "state": "Noord-Holland",
+        "country": "Nederland",
+        "country_code": "nl",
+        "display_name": "Westtunnel, Centrum, Amsterdam, Noord-Holland, Nederland, 1012 AB, Nederland"
+    },
+    "database": "netherlands-gtfs.sqlite",
+    "count": 50,
+    "routes": [
+        {
+            "route_id": "17803",
+            "short_name": "Sprinter",
+            "long_name": "Amsterdam Centraal <-> Zandvoort aan Zee SPR5400",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Amsterdam Centraal",
+            "headsigns": [
+                "Amsterdam Centraal",
+                "Zandvoort aan Zee",
+                "Haarlem"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "41226",
+            "short_name": "Sprinter",
+            "long_name": "Amsterdam Centraal <-> Hoorn SPR4800",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Hoorn",
+            "headsigns": [
+                "Hoorn",
+                "Alkmaar",
+                "Amsterdam Centraal",
+                "Haarlem",
+                "Santpoort Noord"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "17748",
+            "short_name": "Sprinter",
+            "long_name": "Uitgeest <-> Rotterdam Centraal SPR4000",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Amsterdam Centraal",
+            "headsigns": [
+                "Amsterdam Centraal",
+                "Uitgeest",
+                "Rotterdam Centraal",
+                "Den Haag Centraal",
+                "Utrecht Centraal",
+                "Breukelen",
+                "Gouda",
+                "Bodegraven"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "143083",
+            "short_name": "Intercity",
+            "long_name": "Amsterdam Centraal <-> Vlissingen IC2200",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Vlissingen",
+            "headsigns": [
+                "Vlissingen",
+                "Amsterdam Centraal",
+                "Roosendaal",
+                "Rotterdam Centraal",
+                "Den Haag Centraal",
+                "Leiden Centraal",
+                "Delft Campus",
+                "Delft",
+                "Haarlem"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "139876",
+            "short_name": "Intercity",
+            "long_name": "Amsterdam Centraal <-> Vlissingen IC2300",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Vlissingen",
+            "headsigns": [
+                "Vlissingen",
+                "Roosendaal",
+                "Amsterdam Centraal",
+                "Rotterdam Centraal",
+                "Dordrecht",
+                "Leiden Centraal",
+                "Delft Campus",
+                "Delft",
+                "Haarlem"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "139889",
+            "short_name": "Sprinter",
+            "long_name": "Haarlem <-> Den Haag Centraal SPR4200",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Amsterdam Centraal",
+            "headsigns": [
+                "Amsterdam Centraal",
+                "Den Haag Centraal",
+                "Leiden Centraal",
+                "Den Haag HS"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "17661",
+            "short_name": "Intercity",
+            "long_name": "Amsterdam Centraal <-> Den Haag Centraal IC2100",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Den Haag Centraal",
+            "headsigns": [
+                "Den Haag Centraal",
+                "Amsterdam Centraal",
+                "Haarlem"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "159461",
+            "short_name": "Eurostar",
+            "long_name": "Paris-Nord <-> Amsterdam Centraal EST9300",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS_INT",
+            "agency_name": "NS International",
+            "headsign": "Amsterdam Centraal",
+            "headsigns": [
+                "Amsterdam Centraal",
+                "Paris-Nord",
+                "Brussel-Zuid",
+                "Marne-la-Vallée-Chessy"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "140445",
+            "short_name": "Intercity",
+            "long_name": "Amsterdam Centraal <-> Deventer IC1500",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Amsterdam Centraal",
+            "headsigns": [
+                "Amsterdam Centraal",
+                "Deventer",
+                "Arnhem Centraal",
+                "Amersfoort Centraal",
+                "Zutphen",
+                "Weesp"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "114914",
+            "short_name": "Sprinter",
+            "long_name": "Amsterdam Centraal <-> Hoofddorp SPR8300",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Hoofddorp",
+            "headsigns": [
+                "Hoofddorp",
+                "Amsterdam Centraal"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "114915",
+            "short_name": "Sprinter",
+            "long_name": "Amsterdam Centraal <-> Hoofddorp SPR8400",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Hoofddorp",
+            "headsigns": [
+                "Hoofddorp",
+                "Amsterdam Centraal"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "114912",
+            "short_name": "Sprinter",
+            "long_name": "Amsterdam Centraal <-> Hoofddorp SPR8100",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Hoofddorp",
+            "headsigns": [
+                "Hoofddorp",
+                "Amsterdam Centraal"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "114900",
+            "short_name": "Sprinter",
+            "long_name": "Den Haag Centraal <-> Lelystad Centrum SPR4300",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Den Haag Centraal",
+            "headsigns": [
+                "Den Haag Centraal"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "52986",
+            "short_name": "Intercity",
+            "long_name": "Enkhuizen <-> Maastricht IC2900",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Enkhuizen",
+            "headsigns": [
+                "Enkhuizen",
+                "Zaandam",
+                "Amsterdam Centraal",
+                "Maastricht",
+                "Eindhoven Centraal",
+                "Nijmegen",
+                "Roermond",
+                "Den Helder",
+                "Hoorn"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "17792",
+            "short_name": "Intercity",
+            "long_name": "Den Helder <-> Nijmegen IC3000",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Den Helder",
+            "headsigns": [
+                "Den Helder",
+                "Heerhugowaard",
+                "Alkmaar",
+                "Nijmegen",
+                "Driebergen-Zeist",
+                "Ede-Wageningen",
+                "Utrecht Centraal",
+                "Amsterdam Centraal",
+                "Arnhem Centraal"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "163601",
+            "short_name": "Intercity",
+            "long_name": "Rotterdam Centraal <-> Eindhoven Centraal IC21400",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Amsterdam Centraal",
+            "headsigns": [
+                "Amsterdam Centraal",
+                "Haarlem",
+                "Alkmaar"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "147950",
+            "short_name": "Intercity",
+            "long_name": "Utrecht Centraal <-> Rotterdam Centraal IC1400",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Utrecht Centraal",
+            "headsigns": [
+                "Utrecht Centraal",
+                "Rotterdam Centraal",
+                "Ede-Wageningen",
+                "Amsterdam Centraal",
+                "Nijmegen",
+                "Delft",
+                "Driebergen-Zeist",
+                "Schiphol Airport"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "52991",
+            "short_name": "Sprinter",
+            "long_name": "Breukelen <-> Rhenen SPR7300",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Uitgeest",
+            "headsigns": [
+                "Uitgeest",
+                "Rhenen",
+                "Utrecht Centraal",
+                "Amsterdam Bijlmer ArenA",
+                "Amsterdam Centraal",
+                "Driebergen-Zeist",
+                "Zaandam"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "163616",
+            "short_name": "ICE",
+            "long_name": "Amsterdam Centraal <-> Berlin Südkreuz ICE140",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS_INT",
+            "agency_name": "NS International",
+            "headsign": "Amsterdam Centraal",
+            "headsigns": [
+                "Amsterdam Centraal",
+                "Berlin Südkreuz",
+                "Hannover Hbf"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "163617",
+            "short_name": "ICE",
+            "long_name": "Amsterdam Centraal <-> Berlin Südkreuz ICE240",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS_INT",
+            "agency_name": "NS International",
+            "headsign": "Hannover Hbf",
+            "headsigns": [
+                "Hannover Hbf",
+                "Amsterdam Centraal",
+                "Berlin Südkreuz"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "114873",
+            "short_name": "Intercity",
+            "long_name": "Alkmaar <-> Maastricht IC2700",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Alkmaar",
+            "headsigns": [
+                "Alkmaar",
+                "Maastricht",
+                "Heerlen",
+                "Eindhoven Centraal",
+                "Amsterdam Centraal",
+                "Nijmegen",
+                "Roermond",
+                "Zaandam",
+                "Den Helder"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "160553",
+            "short_name": "ICE",
+            "long_name": "Amsterdam Centraal <-> Frankfurt (M) Hbf ICE100",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS_INT",
+            "agency_name": "NS International",
+            "headsign": "Amsterdam Centraal",
+            "headsigns": [
+                "Amsterdam Centraal",
+                "Frankfurt (M) Hbf",
+                "Frankfurt Flughafen Fernb"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "114911",
+            "short_name": "Sprinter",
+            "long_name": "Uitgeest <-> Driebergen-Zeist SPR7400",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Uitgeest",
+            "headsigns": [
+                "Uitgeest",
+                "Driebergen-Zeist",
+                "Utrecht Centraal",
+                "Amsterdam Centraal"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "120390",
+            "short_name": "Intercity",
+            "long_name": "Enkhuizen <-> Amsterdam Centraal IC3700",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Amsterdam Centraal",
+            "headsigns": [
+                "Amsterdam Centraal",
+                "Enkhuizen"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "139894",
+            "short_name": "ICE",
+            "long_name": "Amsterdam Centraal <-> Frankfurt (M) Hbf ICE1200",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS_INT",
+            "agency_name": "NS International",
+            "headsign": "Amsterdam Centraal",
+            "headsigns": [
+                "Amsterdam Centraal",
+                "Frankfurt (M) Hbf",
+                "München Hbf"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "160718",
+            "short_name": "ICE",
+            "long_name": "Amsterdam Centraal <-> München Hbf ICE200",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS_INT",
+            "agency_name": "NS International",
+            "headsign": "Frankfurt (M) Hbf",
+            "headsigns": [
+                "Frankfurt (M) Hbf",
+                "München Hbf",
+                "Mannheim Hbf",
+                "Amsterdam Centraal",
+                "Frankfurt Flughafen Fernb"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "83134",
+            "short_name": "Intercity",
+            "long_name": "Enkhuizen <-> Heerlen IC3900",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Heerlen",
+            "headsigns": [
+                "Heerlen",
+                "Vlissingen",
+                "Amsterdam Centraal",
+                "Eindhoven Centraal",
+                "Enkhuizen"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "114870",
+            "short_name": "Intercity",
+            "long_name": "Enkhuizen <-> Amsterdam Centraal IC12900",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Ede-Wageningen",
+            "headsigns": [
+                "Ede-Wageningen",
+                "Nijmegen",
+                "Amsterdam Centraal"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "114879",
+            "short_name": "Intercity",
+            "long_name": "Schiphol Airport <-> Groningen IC700",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Schiphol Airport",
+            "headsigns": [
+                "Schiphol Airport"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "163249",
+            "short_name": "Intercity",
+            "long_name": "Den Haag HS <-> Roosendaal IC82200",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Amsterdam Centraal",
+            "headsigns": [
+                "Amsterdam Centraal"
+            ],
+            "closest_stop": {
+                "stop_id": "2992191",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379128,
+                "lon": 4.899444,
+                "distance_m": 7,
+                "distance_km": 0.007
+            }
+        },
+        {
+            "route_id": "44942",
+            "short_name": "Intercity",
+            "long_name": "Amsterdam Centraal <-> Almere Centrum IC2600",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Almere Centrum",
+            "headsigns": [
+                "Almere Centrum",
+                "Amsterdam Centraal",
+                "Lelystad Centrum"
+            ],
+            "closest_stop": {
+                "stop_id": "2992194",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379211,
+                "lon": 4.899568,
+                "distance_m": 10,
+                "distance_km": 0.01
+            }
+        },
+        {
+            "route_id": "114913",
+            "short_name": "Sprinter",
+            "long_name": "Amsterdam Centraal <-> Hoofddorp SPR8200",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Hoofddorp",
+            "headsigns": [
+                "Hoofddorp",
+                "Amsterdam Centraal"
+            ],
+            "closest_stop": {
+                "stop_id": "2992194",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379211,
+                "lon": 4.899568,
+                "distance_m": 10,
+                "distance_km": 0.01
+            }
+        },
+        {
+            "route_id": "146790",
+            "short_name": "Nachttrein",
+            "long_name": "Maastricht <-> Schiphol Airport NT32700",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:ARRIVA",
+            "agency_name": "Arriva",
+            "headsign": "Schiphol Airport",
+            "headsigns": [
+                "Schiphol Airport",
+                "Maastricht",
+                "Zwolle",
+                "Lelystad Centrum",
+                "Groningen"
+            ],
+            "closest_stop": {
+                "stop_id": "2992194",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379211,
+                "lon": 4.899568,
+                "distance_m": 10,
+                "distance_km": 0.01
+            }
+        },
+        {
+            "route_id": "162838",
+            "short_name": "Intercity",
+            "long_name": "Maastricht <-> Eindhoven Centraal IC82900",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Enkhuizen",
+            "headsigns": [
+                "Enkhuizen",
+                "Hoorn"
+            ],
+            "closest_stop": {
+                "stop_id": "2992194",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379211,
+                "lon": 4.899568,
+                "distance_m": 10,
+                "distance_km": 0.01
+            }
+        },
+        {
+            "route_id": "162843",
+            "short_name": "Sprinter",
+            "long_name": "Breukelen <-> Rotterdam Centraal SPR84000",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Amsterdam Centraal",
+            "headsigns": [
+                "Amsterdam Centraal"
+            ],
+            "closest_stop": {
+                "stop_id": "2992194",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379211,
+                "lon": 4.899568,
+                "distance_m": 10,
+                "distance_km": 0.01
+            }
+        },
+        {
+            "route_id": "114904",
+            "short_name": "Sprinter",
+            "long_name": "Amsterdam Centraal <-> Amersfoort Vathorst SPR5800",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Amsterdam Centraal",
+            "headsigns": [
+                "Amsterdam Centraal",
+                "Amersfoort Centraal",
+                "Amersfoort Vathorst",
+                "Weesp",
+                "Hilversum",
+                "Utrecht Centraal"
+            ],
+            "closest_stop": {
+                "stop_id": "2992188",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379074,
+                "lon": 4.899391,
+                "distance_m": 13,
+                "distance_km": 0.013
+            }
+        },
+        {
+            "route_id": "17658",
+            "short_name": "Intercity",
+            "long_name": "Zwolle <-> Roosendaal IC3600",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Amsterdam Centraal",
+            "headsigns": [
+                "Amsterdam Centraal",
+                "Roosendaal",
+                "Arnhem Centraal",
+                "Nijmegen"
+            ],
+            "closest_stop": {
+                "stop_id": "2992188",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379074,
+                "lon": 4.899391,
+                "distance_m": 13,
+                "distance_km": 0.013
+            }
+        },
+        {
+            "route_id": "114901",
+            "short_name": "Sprinter",
+            "long_name": "Amsterdam Centraal <-> Almere Oostvaarders SPR4600",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Almere Oostvaarders",
+            "headsigns": [
+                "Almere Oostvaarders",
+                "Amsterdam Centraal"
+            ],
+            "closest_stop": {
+                "stop_id": "2992197",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.37928,
+                "lon": 4.899633,
+                "distance_m": 17,
+                "distance_km": 0.017
+            }
+        },
+        {
+            "route_id": "138958",
+            "short_name": "Eurostar",
+            "long_name": "Marne-la-Vallée-Chessy <-> Amsterdam Centraal EST9900",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS_INT",
+            "agency_name": "NS International",
+            "headsign": "Marne-la-Vallée-Chessy",
+            "headsigns": [
+                "Marne-la-Vallée-Chessy",
+                "Amsterdam Centraal"
+            ],
+            "closest_stop": {
+                "stop_id": "2992197",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.37928,
+                "lon": 4.899633,
+                "distance_m": 17,
+                "distance_km": 0.017
+            }
+        },
+        {
+            "route_id": "143259",
+            "short_name": "Eurocity Direct",
+            "long_name": "Brussel-Zuid <-> Lelystad Centrum ECD9500",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS_INT",
+            "agency_name": "NS International",
+            "headsign": "Brussel-Zuid",
+            "headsigns": [
+                "Brussel-Zuid",
+                "Amsterdam Centraal"
+            ],
+            "closest_stop": {
+                "stop_id": "2992197",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.37928,
+                "lon": 4.899633,
+                "distance_m": 17,
+                "distance_km": 0.017
+            }
+        },
+        {
+            "route_id": "154207",
+            "short_name": "Sprinter",
+            "long_name": "Uitgeest <-> Amsterdam Centraal SPR14800",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Amsterdam Centraal",
+            "headsigns": [
+                "Amsterdam Centraal"
+            ],
+            "closest_stop": {
+                "stop_id": "2992185",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.378986,
+                "lon": 4.899292,
+                "distance_m": 24,
+                "distance_km": 0.024
+            }
+        },
+        {
+            "route_id": "162837",
+            "short_name": "Intercity",
+            "long_name": "Haarlem <-> Amsterdam Centraal IC82100",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Amsterdam Centraal",
+            "headsigns": [
+                "Amsterdam Centraal"
+            ],
+            "closest_stop": {
+                "stop_id": "2992185",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.378986,
+                "lon": 4.899292,
+                "distance_m": 24,
+                "distance_km": 0.024
+            }
+        },
+        {
+            "route_id": "162835",
+            "short_name": "Intercity",
+            "long_name": "Schiphol Airport <-> Rotterdam Centraal IC81400",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Haarlem",
+            "headsigns": [
+                "Haarlem",
+                "Utrecht Centraal"
+            ],
+            "closest_stop": {
+                "stop_id": "2992185",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.378986,
+                "lon": 4.899292,
+                "distance_m": 24,
+                "distance_km": 0.024
+            }
+        },
+        {
+            "route_id": "163605",
+            "short_name": "Intercity",
+            "long_name": "Amsterdam Centraal <-> Haarlem",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Haarlem",
+            "headsigns": [
+                "Haarlem"
+            ],
+            "closest_stop": {
+                "stop_id": "2992185",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.378986,
+                "lon": 4.899292,
+                "distance_m": 24,
+                "distance_km": 0.024
+            }
+        },
+        {
+            "route_id": "139884",
+            "short_name": "Sprinter",
+            "long_name": "Amersfoort Vathorst <-> Amsterdam Centraal SPR15800",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Amsterdam Centraal",
+            "headsigns": [
+                "Amsterdam Centraal"
+            ],
+            "closest_stop": {
+                "stop_id": "2992170",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379387,
+                "lon": 4.8997,
+                "distance_m": 29,
+                "distance_km": 0.029
+            }
+        },
+        {
+            "route_id": "163603",
+            "short_name": "Intercity",
+            "long_name": "Heerhugowaard <-> Alkmaar IC83000",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Den Helder",
+            "headsigns": [
+                "Den Helder"
+            ],
+            "closest_stop": {
+                "stop_id": "2992170",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379387,
+                "lon": 4.8997,
+                "distance_m": 29,
+                "distance_km": 0.029
+            }
+        },
+        {
+            "route_id": "163260",
+            "short_name": "Sprinter",
+            "long_name": "Amsterdam Centraal <-> Hoofddorp SPR88100",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Hoofddorp",
+            "headsigns": [
+                "Hoofddorp"
+            ],
+            "closest_stop": {
+                "stop_id": "2992170",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379387,
+                "lon": 4.8997,
+                "distance_m": 29,
+                "distance_km": 0.029
+            }
+        },
+        {
+            "route_id": "163608",
+            "short_name": "Sprinter",
+            "long_name": "Sprinter Amsterdam Centraal <-> Weesp",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Amsterdam Centraal",
+            "headsigns": [
+                "Amsterdam Centraal"
+            ],
+            "closest_stop": {
+                "stop_id": "2992170",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.379387,
+                "lon": 4.8997,
+                "distance_m": 29,
+                "distance_km": 0.029
+            }
+        },
+        {
+            "route_id": "160747",
+            "short_name": "GoVolta",
+            "long_name": "Amsterdam Centraal <-> Berlin-Spandau GV300",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:GV",
+            "agency_name": "GoVolta",
+            "headsign": "Amsterdam Centraal",
+            "headsigns": [
+                "Amsterdam Centraal",
+                "Berlin-Spandau"
+            ],
+            "closest_stop": {
+                "stop_id": "2992182",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.37965,
+                "lon": 4.899983,
+                "distance_m": 63,
+                "distance_km": 0.063
+            }
+        },
+        {
+            "route_id": "160535",
+            "short_name": "Intercity",
+            "long_name": "Utrecht Centraal <-> Rotterdam Centraal IC11400",
+            "route_type": 2,
+            "route_type_name": "rail",
+            "color": null,
+            "agency_id": "IFF:NS",
+            "agency_name": "NS",
+            "headsign": "Rotterdam Centraal",
+            "headsigns": [
+                "Rotterdam Centraal",
+                "Utrecht Centraal"
+            ],
+            "closest_stop": {
+                "stop_id": "2992182",
+                "stop_name": "Amsterdam Centraal",
+                "lat": 52.37965,
+                "lon": 4.899983,
+                "distance_m": 63,
+                "distance_km": 0.063
+            }
+        }
+    ]
+}

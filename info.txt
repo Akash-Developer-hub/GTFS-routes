@@ -1,0 +1,4 @@
+uvicorn api:app --reload --port 8000
+python3 gtfs_builder.py --gtfs gtfs --osm ITC_NEW.osm.pbf --db gtfs.sqlite --max-dist 50
+python3 -m uvicorn api:app --reload --host 127.0.0.1 --port 8000
+http://127.0.0.1:8000/static/routes.html
