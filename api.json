@@ -869,6 +869,63 @@
       ]
     },
     {
+      "id": "stop-detail",
+      "category": "Stops & Stations",
+      "endpoint": "/api/stops/{stop_id}",
+      "method": "GET",
+      "summary": "Stop details and metadata",
+      "description": "Return comprehensive stop metadata, location coordinates (lat/lon), platform info, and calling routes for a stop ID. Supports 'region', 'region_id', or 'regionId' query parameters, with cross-database auto-discovery when omitted.",
+      "parameters": [
+        {
+          "name": "stop_id",
+          "in": "path",
+          "type": "string",
+          "required": true,
+          "description": "GTFS stop ID (e.g. '00102A' for UAE, '2992191' for Netherlands)"
+        },
+        {
+          "name": "region",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Region identifier (e.g. 'uae', 'netherlands-gtfs')"
+        },
+        {
+          "name": "region_id",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Alias for region identifier"
+        },
+        {
+          "name": "regionId",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Alias for region identifier (camelCase)"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "UAE Stop Details (with regionId)",
+          "description": "Retrieve stop details for UAE stop 00102A using regionId parameter.",
+          "url": "http://127.0.0.1:8000/api/stops/00102A?regionId=uae",
+          "params": {
+            "stop_id": "00102A",
+            "regionId": "uae"
+          }
+        },
+        {
+          "name": "Stop Details (Auto-Discovery)",
+          "description": "Retrieve stop details without region parameter, automatically resolving across databases.",
+          "url": "http://127.0.0.1:8000/api/stops/00102A",
+          "params": {
+            "stop_id": "00102A"
+          }
+        }
+      ]
+    },
+    {
       "id": "stop-routes",
       "category": "Stops & Stations",
       "endpoint": "/api/stops/{stop_id}/routes",
@@ -1141,6 +1198,27 @@
           "type": "string",
           "required": true,
           "description": "GTFS trip ID"
+        },
+        {
+          "name": "region",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Region identifier (e.g. 'uae')"
+        },
+        {
+          "name": "region_id",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Alias for region identifier"
+        },
+        {
+          "name": "regionId",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Alias for region identifier (camelCase)"
         }
       ],
       "scenarios": [
@@ -1150,6 +1228,15 @@
           "url": "http://127.0.0.1:8000/api/trips/1/stop-times",
           "params": {
             "trip_id": "1"
+          }
+        },
+        {
+          "name": "UAE Trip Stop Times (with regionId)",
+          "description": "Retrieve ordered stop times for UAE trip 13.TWD.12-101-P-6p2-1.1.O specifying regionId=uae.",
+          "url": "http://127.0.0.1:8000/api/trips/13.TWD.12-101-P-6p2-1.1.O/stop-times?region=uae&regionId=uae",
+          "params": {
+            "region": "uae",
+            "regionId": "uae"
           }
         }
       ]
