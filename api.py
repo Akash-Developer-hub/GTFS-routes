@@ -495,6 +495,109 @@ def _resolve_region_db(region: str) -> tuple[Path, dict]:
         detail=f"Unknown region / database '{region}'. Available: {', '.join(available)}",
     )
 
+_ROUTE_DB_CACHE: dict = {}
+_STOP_DB_CACHE: dict = {}
+_TRIP_DB_CACHE: dict = {}
+
+
+def _find_db_for_route(
+    route_id: str,
+    region: Optional[str] = None,
+    region_id: Optional[str] = None,
+    regionId: Optional[str] = None,
+    mode: str = DEFAULT_MODE,
+) -> Path:
+    """
+    Resolve the correct SQLite database file for a route:
+    1. If region / region_id / regionId is provided, resolve that specific DB.
+    2. Check route-to-database memory cache.
+    3. Check default DB (DB_PATHS[mode] or DB_PATH).
+    4. If not found in default DB, scan all discovered SQLite databases to find which contains route_id.
+    """
+    target_region = regionId or region_id or region
+    if target_region and str(target_region).strip():
+        db_path, _ = _resolve_region_db(str(target_region).strip())
+        _ROUTE_DB_CACHE[route_id] = db_path
+        return db_path
+
+    if route_id in _ROUTE_DB_CACHE:
+        cached_p = _ROUTE_DB_CACHE[route_id]
+        if cached_p.is_file():
+            return cached_p
+
+    # Check default DB first
+    default_db = DB_PATHS.get(mode) or DB_PATH
+    if default_db and default_db.is_file():
+        try:
+            with _open_db(default_db) as conn:
+                row = conn.execute("SELECT 1 FROM routes WHERE route_id = ? LIMIT 1", (route_id,)).fetchone()
+                if row:
+                    _ROUTE_DB_CACHE[route_id] = default_db
+                    return default_db
+        except Exception:
+            pass
+
+    # Scan all discovered SQLite databases dynamically
+    for p in _list_available_sqlite_paths():
+        if default_db and p.resolve() == default_db.resolve():
+            continue
+        try:
+            with _open_db(p) as conn:
+                row = conn.execute("SELECT 1 FROM routes WHERE route_id = ? LIMIT 1", (route_id,)).fetchone()
+                if row:
+                    _ROUTE_DB_CACHE[route_id] = p
+                    return p
+        except Exception:
+            continue
+
+    return default_db
+
+
+def _find_db_for_stop(
+    stop_id: str,
+    region: Optional[str] = None,
+    region_id: Optional[str] = None,
+    regionId: Optional[str] = None,
+    mode: str = DEFAULT_MODE,
+) -> Path:
+    """Resolve correct SQLite DB for a stop, checking explicit region first, then default DB, then all DBs."""
+    target_region = regionId or region_id or region
+    if target_region and str(target_region).strip():
+        db_path, _ = _resolve_region_db(str(target_region).strip())
+        _STOP_DB_CACHE[stop_id] = db_path
+        return db_path
+
+    if stop_id in _STOP_DB_CACHE:
+        cached_p = _STOP_DB_CACHE[stop_id]
+        if cached_p.is_file():
+            return cached_p
+
+    default_db = DB_PATHS.get(mode) or DB_PATH
+    if default_db and default_db.is_file():
+        try:
+            with _open_db(default_db) as conn:
+                row = conn.execute("SELECT 1 FROM stops WHERE stop_id = ? LIMIT 1", (stop_id,)).fetchone()
+                if row:
+                    _STOP_DB_CACHE[stop_id] = default_db
+                    return default_db
+        except Exception:
+            pass
+
+    for p in _list_available_sqlite_paths():
+        if default_db and p.resolve() == default_db.resolve():
+            continue
+        try:
+            with _open_db(p) as conn:
+                row = conn.execute("SELECT 1 FROM stops WHERE stop_id = ? LIMIT 1", (stop_id,)).fetchone()
+                if row:
+                    _STOP_DB_CACHE[stop_id] = p
+                    return p
+        except Exception:
+            continue
+
+    return default_db
+
+
 
 def _get_db_timezone(conn: sqlite3.Connection) -> ZoneInfo:
     """Return the primary ZoneInfo for the database, defaulting to UTC."""
@@ -2614,6 +2717,9 @@ def all_routes(
 def stop_routes(
     stop_id: str,
     lang: Optional[str] = _LANG_QUERY,
+    region: Optional[str] = Query(default=None, description="Optional region / database override"),
+    region_id: Optional[str] = Query(default=None, description="Alias for region identifier"),
+    regionId: Optional[str] = Query(default=None, description="Alias for region identifier (camelCase)"),
     mode: str = Query(
         default=DEFAULT_MODE,
         description="Which service to query: 'transit' (bus), 'ferry' "
@@ -2622,7 +2728,8 @@ def stop_routes(
     ),
 ):
     """All distinct routes that serve *stop_id*."""
-    with _db(mode) as conn:
+    db_path = _find_db_for_stop(stop_id, region=region, region_id=region_id, regionId=regionId, mode=mode)
+    with _open_db(db_path) as conn:
         # Verify stop exists
         row = conn.execute(
             "SELECT stop_id, stop_name FROM stops WHERE stop_id = ?", (stop_id,)
@@ -4307,6 +4414,104 @@ def osm_stop_next_departures(
     return next_departures(stop_id=stop_id, at=at, limit=limit)
 
 
+
+# ── Route Details ─────────────────────────────────────────────────────────────
+
+@app.get("/api/routes/{route_id}")
+def route_detail(
+    route_id: str,
+    region: Optional[str] = Query(default=None, description="Optional region / database override"),
+    region_id: Optional[str] = Query(default=None, description="Alias for region identifier"),
+    regionId: Optional[str] = Query(default=None, description="Alias for region identifier (camelCase)"),
+    mode: str = Query(default=DEFAULT_MODE),
+):
+    """
+    Return comprehensive route metadata and details for *route_id*.
+    Accepts 'region', 'region_id', or 'regionId' to query a specific database;
+    if omitted, automatically locates the database containing the route across all available datasets.
+    """
+    db_path = _find_db_for_route(route_id, region=region, region_id=region_id, regionId=regionId, mode=mode)
+    with _open_db(db_path) as conn:
+        r = conn.execute(
+            """
+            SELECT route_id, agency_id, route_short_name, route_long_name,
+                   route_type, route_color, route_text_color, route_url
+            FROM routes
+            WHERE route_id = ?
+            """,
+            (route_id,),
+        ).fetchone()
+        if r is None:
+            raise HTTPException(status_code=404, detail=f"route_id '{route_id}' not found in database '{db_path.name}'")
+
+        rtype = int(r["route_type"]) if r["route_type"] is not None else 3
+
+        trip_stats = conn.execute(
+            """
+            SELECT COUNT(trip_id) AS trip_count,
+                   COUNT(DISTINCT shape_id) AS shape_count
+            FROM trips
+            WHERE route_id = ?
+            """,
+            (route_id,),
+        ).fetchone()
+
+        headsign_rows = conn.execute(
+            """
+            SELECT DISTINCT trip_headsign
+            FROM trips
+            WHERE route_id = ? AND trip_headsign IS NOT NULL AND TRIM(trip_headsign) != ''
+            ORDER BY trip_headsign
+            """,
+            (route_id,),
+        ).fetchall()
+        headsigns = [h["trip_headsign"].strip() for h in headsign_rows]
+
+        rep_trip = conn.execute(
+            "SELECT trip_id FROM trips WHERE route_id = ? ORDER BY trip_id LIMIT 1",
+            (route_id,),
+        ).fetchone()
+
+        start_stop = None
+        end_stop = None
+        stop_count = 0
+        if rep_trip:
+            stop_rows = conn.execute(
+                """
+                SELECT s.stop_name
+                FROM stop_times st
+                JOIN stops s ON s.stop_id = st.stop_id
+                WHERE st.trip_id = ?
+                ORDER BY CAST(st.stop_sequence AS INTEGER)
+                """,
+                (rep_trip["trip_id"],),
+            ).fetchall()
+            stop_count = len(stop_rows)
+            if stop_rows:
+                start_stop = stop_rows[0]["stop_name"]
+                end_stop = stop_rows[-1]["stop_name"]
+
+        return {
+            "route_id": r["route_id"],
+            "agency_id": r["agency_id"],
+            "route_short_name": r["route_short_name"],
+            "route_long_name": r["route_long_name"],
+            "route_type": rtype,
+            "route_type_name": _route_type_to_mode(rtype),
+            "route_color": r["route_color"],
+            "route_text_color": r["route_text_color"],
+            "route_url": r["route_url"],
+            "trip_count": trip_stats["trip_count"] if trip_stats else 0,
+            "shape_count": trip_stats["shape_count"] if trip_stats else 0,
+            "start_stop_name": start_stop,
+            "end_stop_name": end_stop,
+            "stops_count": stop_count,
+            "in_between_stops": max(0, stop_count - 2),
+            "headsigns": headsigns,
+            "database": db_path.name,
+        }
+
+
 # ── Stops for a route ────────────────────────────────────────────────────────
 
 @app.get("/api/routes/{route_id}/stops")
@@ -4317,6 +4522,9 @@ def route_stops(
         description="Filter by direction: 0 or 1. Omit to return all directions.",
     ),
     lang: Optional[str] = _LANG_QUERY,
+    region: Optional[str] = Query(default=None, description="Optional region / database override"),
+    region_id: Optional[str] = Query(default=None, description="Alias for region identifier"),
+    regionId: Optional[str] = Query(default=None, description="Alias for region identifier (camelCase)"),
     mode: str = Query(
         default=DEFAULT_MODE,
         description="Which service to query: 'transit' (bus), 'ferry' "
@@ -4326,18 +4534,11 @@ def route_stops(
 ):
     """
     Return the ordered stops for *route_id*, derived from a representative trip.
-
-    Each stop entry includes:
-    - ``stop_id``, ``stop_name``, ``stop_code``
-    - ``lat``, ``lon``
-    - ``stop_sequence``
-    - ``direction_id``
-    - ``lang`` -- optional language code for translation (e.g. 'ar')
-
-    If the route has two directions both are returned unless *direction_id* is
-    supplied.
+    Supports 'region', 'region_id', or 'regionId' parameter; automatically
+    locates the correct database across all available datasets if omitted.
     """
-    with _db(mode) as conn:
+    db_path = _find_db_for_route(route_id, region=region, region_id=region_id, regionId=regionId, mode=mode)
+    with _open_db(db_path) as conn:
         # Verify route exists
         route_row = conn.execute(
             "SELECT route_id, route_short_name, route_long_name, "
@@ -4444,6 +4645,9 @@ def route_stop_next_departures(
         ),
     ),
     limit: int = Query(default=10, ge=1, le=100, description="Max results to return"),
+    region: Optional[str] = Query(default=None, description="Optional region / database override"),
+    region_id: Optional[str] = Query(default=None, description="Alias for region identifier"),
+    regionId: Optional[str] = Query(default=None, description="Alias for region identifier (camelCase)"),
     mode: str = Query(
         default=DEFAULT_MODE,
         description="Which service to query: 'transit' (bus), 'ferry' "
@@ -4486,7 +4690,8 @@ def route_stop_next_departures(
         # Date-only → return the full day starting from midnight
         from_secs = 0 if date_only else (parsed.hour * 3600 + parsed.minute * 60 + parsed.second)
 
-    with _db(mode) as conn:
+    db_path = _find_db_for_route(route_id, region=region, region_id=region_id, regionId=regionId, mode=mode)
+    with _open_db(db_path) as conn:
         # Verify route exists
         route_row = conn.execute(
             "SELECT route_id, route_short_name, route_long_name, "
@@ -4644,6 +4849,9 @@ def route_next_departures(
         ),
     ),
     limit: int = Query(default=10, ge=1, le=100, description="Max results to return"),
+    region: Optional[str] = Query(default=None, description="Optional region / database override"),
+    region_id: Optional[str] = Query(default=None, description="Alias for region identifier"),
+    regionId: Optional[str] = Query(default=None, description="Alias for region identifier (camelCase)"),
     mode: str = Query(
         default=DEFAULT_MODE,
         description="Which service to query: 'transit' (bus), 'ferry' "
@@ -4685,7 +4893,8 @@ def route_next_departures(
         on_date   = parsed.date() if parsed.year != 1900 else date.today()
         from_secs = 0 if date_only else (parsed.hour * 3600 + parsed.minute * 60 + parsed.second)
 
-    with _db(mode) as conn:
+    db_path = _find_db_for_route(route_id, region=region, region_id=region_id, regionId=regionId, mode=mode)
+    with _open_db(db_path) as conn:
         # Verify route exists
         route_row = conn.execute(
             "SELECT route_id, route_short_name, route_long_name, "
@@ -5344,6 +5553,9 @@ def all_shapes(
 @app.get("/api/routes/{route_id}/shapes")
 def route_shapes(
     route_id: str,
+    region: Optional[str] = Query(default=None, description="Optional region / database override"),
+    region_id: Optional[str] = Query(default=None, description="Alias for region identifier"),
+    regionId: Optional[str] = Query(default=None, description="Alias for region identifier (camelCase)"),
     mode: str = Query(
         default=DEFAULT_MODE,
         description="Which service to query: 'transit' (bus), 'ferry' "
@@ -5353,13 +5565,9 @@ def route_shapes(
 ):
     """
     Return a GeoJSON FeatureCollection for *route_id*.
-
-    Contains:
-    - One **LineString** per direction with route metadata in ``properties``
-    - One **Point** (``feature_type="start"``) for the first stop of each direction
-    - One **Point** (``feature_type="end"``) for the last stop of each direction
     """
-    with _db(mode) as conn:
+    db_path = _find_db_for_route(route_id, region=region, region_id=region_id, regionId=regionId, mode=mode)
+    with _open_db(db_path) as conn:
         route_row = conn.execute(
             "SELECT route_id, route_short_name, route_long_name,"
             " route_color, route_text_color FROM routes WHERE route_id = ?",
@@ -5495,6 +5703,9 @@ def route_shapes(
 def route_shape_trips(
     route_id: str,
     shape_id: str,
+    region: Optional[str] = Query(default=None, description="Optional region / database override"),
+    region_id: Optional[str] = Query(default=None, description="Alias for region identifier"),
+    regionId: Optional[str] = Query(default=None, description="Alias for region identifier (camelCase)"),
     mode: str = Query(
         default=DEFAULT_MODE,
         description="Which service to query: 'transit' (bus), 'ferry' "
@@ -5503,11 +5714,10 @@ def route_shape_trips(
     ),
 ):
     """
-    Return all trip_ids for the given *route_id* + *shape_id*, each with its
-    full stop-time schedule (stop sequence, stop info, arrival_time,
-    departure_time).
+    Return all trip_ids for the given *route_id* + *shape_id*.
     """
-    with _db(mode) as conn:
+    db_path = _find_db_for_route(route_id, region=region, region_id=region_id, regionId=regionId, mode=mode)
+    with _open_db(db_path) as conn:
         route_row = conn.execute(
             "SELECT route_id, route_short_name, route_long_name, "
             "route_color, route_text_color FROM routes WHERE route_id = ?",
@@ -5604,6 +5814,9 @@ def route_schedule(
     limit: int = Query(default=50, ge=1, le=500, description="Max trips to return per day"),
     offset: int = Query(default=0, ge=0, description="Number of trips to skip per day (for pagination)"),
     lang: Optional[str] = _LANG_QUERY,
+    region: Optional[str] = Query(default=None, description="Optional region / database override"),
+    region_id: Optional[str] = Query(default=None, description="Alias for region identifier"),
+    regionId: Optional[str] = Query(default=None, description="Alias for region identifier (camelCase)"),
     mode: str = Query(
         default=DEFAULT_MODE,
         description="Which service to query: 'transit' (bus), 'ferry' "
@@ -5683,7 +5896,8 @@ def route_schedule(
                 detail="'filter' must be 'today', 'tomorrow', 'this_week', or a date in MM/DD/YYYY format",
             )
 
-    with _db(mode) as conn:
+    db_path = _find_db_for_route(route_id, region=region, region_id=region_id, regionId=regionId, mode=mode)
+    with _open_db(db_path) as conn:
         route_row = conn.execute(
             "SELECT route_id, route_short_name, route_long_name, "
             "route_color, route_text_color FROM routes WHERE route_id = ?",
@@ -6642,6 +6856,9 @@ def route_next_departures_both(
     route_id: str,
     at: Optional[str] = Query(default=None),
     limit: int = Query(default=10, ge=1, le=100),
+    region: Optional[str] = Query(default=None, description="Optional region / database override"),
+    region_id: Optional[str] = Query(default=None, description="Alias for region identifier"),
+    regionId: Optional[str] = Query(default=None, description="Alias for region identifier (camelCase)"),
     mode: str = Query(
         default=DEFAULT_MODE,
         description="Which service to query: 'transit' (bus), 'ferry' "
@@ -6652,9 +6869,10 @@ def route_next_departures_both(
     """
     Return the next *limit* departures across all stops for *route_id* with BOTH English and Arabic translations in the payload.
     """
-    en_result = route_next_departures(route_id=route_id, at=at, limit=limit, mode=mode)
+    en_result = route_next_departures(route_id=route_id, at=at, limit=limit, region=region, region_id=region_id, regionId=regionId, mode=mode)
     
-    with _db(mode) as conn:
+    db_path = _find_db_for_route(route_id, region=region, region_id=region_id, regionId=regionId, mode=mode)
+    with _open_db(db_path) as conn:
         stop_tr_ar = _get_stop_translations(conn, "ar")
         trip_tr_ar = _get_trip_translations(conn, "ar")
         

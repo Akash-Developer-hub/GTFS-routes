@@ -501,6 +501,60 @@
       ]
     },
     {
+      "id": "route-detail",
+      "category": "Routes & Lines",
+      "endpoint": "/api/routes/{route_id}",
+      "method": "GET",
+      "summary": "Detailed route profile and metadata",
+      "description": "Returns full route details (name, short name, vehicle mode, agency, start/end terminal stops, stop count, trip count, headsigns). Accepts region, region_id, or regionId; auto-detects the containing database if omitted.",
+      "parameters": [
+        {
+          "name": "route_id",
+          "in": "path",
+          "type": "string",
+          "required": true,
+          "description": "GTFS route ID (e.g. '12-101-P-6p2-1')"
+        },
+        {
+          "name": "region",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Region identifier (e.g. 'uae')"
+        },
+        {
+          "name": "region_id",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Alias for region identifier"
+        },
+        {
+          "name": "regionId",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Alias for region identifier (camelCase)"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "UAE Route Details (with regionId)",
+          "description": "Fetch details for UAE line 101 specifying regionId=uae.",
+          "url": "http://127.0.0.1:8000/api/routes/12-101-P-6p2-1?regionId=uae",
+          "params": {
+            "regionId": "uae"
+          }
+        },
+        {
+          "name": "UAE Route Details (Auto-Detect without region)",
+          "description": "Fetch details for UAE line 101 with auto-detection across databases.",
+          "url": "http://127.0.0.1:8000/api/routes/12-101-P-6p2-1",
+          "params": {}
+        }
+      ]
+    },
+    {
       "id": "route-stops",
       "category": "Routes & Lines",
       "endpoint": "/api/routes/{route_id}/stops",
@@ -521,6 +575,20 @@
           "type": "string",
           "required": false,
           "description": "Region identifier"
+        },
+        {
+          "name": "region_id",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Alias for region identifier"
+        },
+        {
+          "name": "regionId",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Alias for region identifier (camelCase)"
         }
       ],
       "scenarios": [
@@ -531,6 +599,20 @@
           "params": {
             "route_id": "17803"
           }
+        },
+        {
+          "name": "UAE Route Stops (with regionId)",
+          "description": "Fetch ordered stops for UAE line 101 specifying regionId=uae.",
+          "url": "http://127.0.0.1:8000/api/routes/12-101-P-6p2-1/stops?regionId=uae",
+          "params": {
+            "regionId": "uae"
+          }
+        },
+        {
+          "name": "UAE Route Stops (Auto-Detect without region)",
+          "description": "Fetch ordered stops for UAE line 101 with automatic database detection.",
+          "url": "http://127.0.0.1:8000/api/routes/12-101-P-6p2-1/stops",
+          "params": {}
         }
       ]
     },
@@ -555,6 +637,20 @@
           "type": "string",
           "required": false,
           "description": "Region database"
+        },
+        {
+          "name": "region_id",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Alias for region identifier"
+        },
+        {
+          "name": "regionId",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Alias for region identifier (camelCase)"
         }
       ],
       "scenarios": [
@@ -564,6 +660,15 @@
           "url": "http://127.0.0.1:8000/api/routes/17803/schedule",
           "params": {
             "route_id": "17803"
+          }
+        },
+        {
+          "name": "UAE Route Timetable / Schedule (with regionId)",
+          "description": "Fetch today's scheduled departures for UAE line 101 specifying regionId=uae.",
+          "url": "http://127.0.0.1:8000/api/routes/12-101-P-6p2-1/schedule?regionId=uae&filter=today",
+          "params": {
+            "regionId": "uae",
+            "filter": "today"
           }
         }
       ]
