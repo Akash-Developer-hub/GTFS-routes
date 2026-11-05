@@ -1,0 +1,1494 @@
+{
+  "title": "GTFS Transit & Realtime API Specification",
+  "version": "2.0.0",
+  "base_url": "http://127.0.0.1:8000",
+  "description": "Comprehensive reference of all available GTFS transit, hierarchy search, routing, stops, trips, agencies, and realtime feeds APIs with practical use case scenarios.",
+  "categories": [
+    "Regions & Database Management",
+    "Hierarchical Search (Radius -> City -> State -> Country)",
+    "Routes & Lines",
+    "Stops & Stations",
+    "Departures & Timetables",
+    "Trips & Stop Times",
+    "Shapes & Geometry",
+    "Transit Agencies",
+    "Realtime GTFS-RT (Delays, Vehicles, Alerts)",
+    "Network Statistics, Journeys & OSM Mapping"
+  ],
+  "apis": [
+    {
+      "id": "regions-list",
+      "category": "Regions & Database Management",
+      "endpoint": "/api/regions/list",
+      "method": "GET",
+      "summary": "List available region databases and their transit modes",
+      "description": "Discovers and lists all GTFS SQLite databases available in the environment with their unique identifier, name, database file, and available transit modes (rail, ferry, bus, tram, subway, etc.).",
+      "parameters": [],
+      "scenarios": [
+        {
+          "name": "List All Discovered Regions",
+          "description": "Retrieve all dynamically detected country/region databases along with their available transit modes (e.g. bus, rail, ferry, tram).",
+          "url": "http://127.0.0.1:8000/api/regions/list",
+          "params": {}
+        }
+      ]
+    },
+    {
+      "id": "regions-spatial-metadata",
+      "category": "Regions & Database Management",
+      "endpoint": "/api/regions",
+      "method": "GET",
+      "summary": "Spatial bounds and metadata of all regions",
+      "description": "Returns geographic bounding boxes (min/max lat/lon), center points, total stops, and route counts for all detected SQLite databases.",
+      "parameters": [],
+      "scenarios": [
+        {
+          "name": "Inspect Spatial Coverage Across All Regions",
+          "description": "Fetch bounding box coordinates and stop counts for all country databases to configure map boundaries.",
+          "url": "http://127.0.0.1:8000/api/regions",
+          "params": {}
+        }
+      ]
+    },
+    {
+      "id": "routes-search-hierarchy",
+      "category": "Hierarchical Search (Radius -> City -> State -> Country)",
+      "endpoint": "/api/routes/search-hierarchy",
+      "method": "GET",
+      "summary": "Hierarchical active routes search from coordinates",
+      "description": "Finds active transit lines near coordinates. Checks 500m radius first; if no routes are active/found, cascades automatically to city (15km), state (60km), and nationwide country levels.",
+      "parameters": [
+        {
+          "name": "lat",
+          "in": "query",
+          "type": "float",
+          "required": true,
+          "description": "Latitude coordinate"
+        },
+        {
+          "name": "lon",
+          "in": "query",
+          "type": "float",
+          "required": true,
+          "description": "Longitude coordinate"
+        },
+        {
+          "name": "radius",
+          "in": "query",
+          "type": "float",
+          "required": false,
+          "default": 500,
+          "description": "Initial radius in meters (from NEARBY_RADIUS_METERS)"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "default": 50,
+          "description": "Maximum routes to return"
+        },
+        {
+          "name": "route_type",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "description": "Filter by GTFS route_type (e.g. 2 for Train/Rail, 3 for Bus, 0 for Tram)"
+        },
+        {
+          "name": "region",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Target specific database identifier (e.g. 'netherlands-gtfs')"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Level 1 (500m Radius Match)",
+          "description": "Search active lines around Amsterdam Central Station within the default 500m radius.",
+          "url": "http://127.0.0.1:8000/api/routes/search-hierarchy?lat=52.379189&lon=4.899431&limit=5",
+          "params": {
+            "lat": 52.379189,
+            "lon": 4.899431,
+            "limit": 5
+          }
+        },
+        {
+          "name": "Level 2 (City-Level Fallback)",
+          "description": "Search coordinates in rural or suburban outskirts where 500m has no stops, cascading to the wider city area.",
+          "url": "http://127.0.0.1:8000/api/routes/search-hierarchy?lat=52.320000&lon=4.980000&limit=5",
+          "params": {
+            "lat": 52.32,
+            "lon": 4.98,
+            "limit": 5
+          }
+        },
+        {
+          "name": "Region Override With Route Type Filter (Trains Only)",
+          "description": "Lock search to netherlands-gtfs database and return rail routes only (route_type=2).",
+          "url": "http://127.0.0.1:8000/api/routes/search-hierarchy?lat=52.379189&lon=4.899431&region=netherlands-gtfs&route_type=2&limit=5",
+          "params": {
+            "lat": 52.379189,
+            "lon": 4.899431,
+            "region": "netherlands-gtfs",
+            "route_type": 2,
+            "limit": 5
+          }
+        },
+        {
+          "name": "Custom Initial Radius (1000m)",
+          "description": "Expand initial radius to 1,000 meters before initiating city-level fallback.",
+          "url": "http://127.0.0.1:8000/api/routes/search-hierarchy?lat=52.379189&lon=4.899431&radius=1000&limit=5",
+          "params": {
+            "lat": 52.379189,
+            "lon": 4.899431,
+            "radius": 1000,
+            "limit": 5
+          }
+        }
+      ]
+    },
+    {
+      "id": "stops-search-hierarchy",
+      "category": "Hierarchical Search (Radius -> City -> State -> Country)",
+      "endpoint": "/api/stops/search-hierarchy",
+      "method": "GET",
+      "summary": "Hierarchical active stops or routes search",
+      "description": "Hierarchical active search cascading 500m -> city -> state -> country. Allows toggling response type between routes (default) and stops.",
+      "parameters": [
+        {
+          "name": "lat",
+          "in": "query",
+          "type": "float",
+          "required": true,
+          "description": "Latitude coordinate"
+        },
+        {
+          "name": "lon",
+          "in": "query",
+          "type": "float",
+          "required": true,
+          "description": "Longitude coordinate"
+        },
+        {
+          "name": "type",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "default": "routes",
+          "description": "'routes' (default) or 'stops'"
+        },
+        {
+          "name": "radius",
+          "in": "query",
+          "type": "float",
+          "required": false,
+          "default": 500,
+          "description": "Initial radius in meters"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "default": 50,
+          "description": "Maximum items to return"
+        },
+        {
+          "name": "route_type",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "description": "Filter by route type"
+        },
+        {
+          "name": "group_parent",
+          "in": "query",
+          "type": "bool",
+          "required": false,
+          "default": true,
+          "description": "Group platform stops under parent stations"
+        },
+        {
+          "name": "region",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Target region identifier"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Hierarchical Search for Stops",
+          "description": "Display active physical transit stops present in the hierarchy around coordinates.",
+          "url": "http://127.0.0.1:8000/api/stops/search-hierarchy?lat=52.379189&lon=4.899431&type=stops&limit=5",
+          "params": {
+            "lat": 52.379189,
+            "lon": 4.899431,
+            "type": "stops",
+            "limit": 5
+          }
+        },
+        {
+          "name": "Hierarchical Search for Routes (Default)",
+          "description": "Display active routes with deduplicated headsigns present in the hierarchy.",
+          "url": "http://127.0.0.1:8000/api/stops/search-hierarchy?lat=52.379189&lon=4.899431&type=routes&limit=5",
+          "params": {
+            "lat": 52.379189,
+            "lon": 4.899431,
+            "type": "routes",
+            "limit": 5
+          }
+        },
+        {
+          "name": "Hierarchical Stops with Platform Ungrouping",
+          "description": "Return individual platform stops rather than grouping under parent stations (group_parent=false).",
+          "url": "http://127.0.0.1:8000/api/stops/search-hierarchy?lat=52.379189&lon=4.899431&type=stops&group_parent=false&limit=10",
+          "params": {
+            "lat": 52.379189,
+            "lon": 4.899431,
+            "type": "stops",
+            "group_parent": false,
+            "limit": 10
+          }
+        }
+      ]
+    },
+    {
+      "id": "routes-list",
+      "category": "Routes & Lines",
+      "endpoint": "/api/routes",
+      "method": "GET",
+      "summary": "Browse, filter and search transit routes",
+      "description": "Paginated route catalog supporting text search, agency filtering, route type filtering, region locking, and terminal stop metadata.",
+      "parameters": [
+        {
+          "name": "region",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Region identifier (e.g. 'netherlands-gtfs')"
+        },
+        {
+          "name": "q",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Search text matching route short/long name or destination"
+        },
+        {
+          "name": "agency_id",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Filter by operator/agency ID (e.g. 'IFF:ns')"
+        },
+        {
+          "name": "route_type",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "description": "Filter by route type: 0=Tram, 1=Subway, 2=Rail, 3=Bus, 4=Ferry"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "default": 50,
+          "description": "Items per page"
+        },
+        {
+          "name": "offset",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "default": 0,
+          "description": "Offset for pagination"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Paginated Route Listing",
+          "description": "Fetch first page of 5 routes with total route count.",
+          "url": "http://127.0.0.1:8000/api/routes?limit=5&offset=0",
+          "params": {
+            "limit": 5,
+            "offset": 0
+          }
+        },
+        {
+          "name": "Target Specific Region Database",
+          "description": "Retrieve routes strictly from the Netherlands GTFS database.",
+          "url": "http://127.0.0.1:8000/api/routes?region=netherlands-gtfs&limit=5",
+          "params": {
+            "region": "netherlands-gtfs",
+            "limit": 5
+          }
+        },
+        {
+          "name": "Search Routes by Name / Keyword",
+          "description": "Search routes matching keyword 'Sprinter'.",
+          "url": "http://127.0.0.1:8000/api/routes?q=Sprinter&limit=5",
+          "params": {
+            "q": "Sprinter",
+            "limit": 5
+          }
+        },
+        {
+          "name": "Filter Routes by Transit Operator (Agency)",
+          "description": "Filter lines operated specifically by Nederlandse Spoorwegen (IFF:ns).",
+          "url": "http://127.0.0.1:8000/api/routes?agency_id=IFF:ns&limit=5",
+          "params": {
+            "agency_id": "IFF:ns",
+            "limit": 5
+          }
+        },
+        {
+          "name": "Filter by Transit Mode (Trains Only: route_type=2)",
+          "description": "Filter lines to train/rail transport mode.",
+          "url": "http://127.0.0.1:8000/api/routes?route_type=2&limit=5",
+          "params": {
+            "route_type": 2,
+            "limit": 5
+          }
+        },
+        {
+          "name": "Combined Search (Region + Agency + Keyword + Pagination)",
+          "description": "Search 'Intercity' lines by NS within Netherlands GTFS on page 2.",
+          "url": "http://127.0.0.1:8000/api/routes?region=netherlands-gtfs&agency_id=IFF:ns&q=Intercity&limit=5&offset=5",
+          "params": {
+            "region": "netherlands-gtfs",
+            "agency_id": "IFF:ns",
+            "q": "Intercity",
+            "limit": 5,
+            "offset": 5
+          }
+        }
+      ]
+    },
+    {
+      "id": "routes-nearby",
+      "category": "Routes & Lines",
+      "endpoint": "/api/routes/nearby",
+      "method": "GET",
+      "summary": "Active routes within coordinate radius",
+      "description": "Queries stops within radius meters, finds active scheduled routes servicing those stops, and returns route details sorted by distance.",
+      "parameters": [
+        {
+          "name": "lat",
+          "in": "query",
+          "type": "float",
+          "required": true,
+          "description": "Latitude"
+        },
+        {
+          "name": "lon",
+          "in": "query",
+          "type": "float",
+          "required": true,
+          "description": "Longitude"
+        },
+        {
+          "name": "radius",
+          "in": "query",
+          "type": "float",
+          "required": false,
+          "default": 500,
+          "description": "Radius in meters"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "default": 30,
+          "description": "Maximum routes to return"
+        },
+        {
+          "name": "route_type",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "description": "Filter route type"
+        },
+        {
+          "name": "region",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Database identifier override"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Routes within 500m of Station",
+          "description": "Find top 3 closest routes serving Amsterdam Centraal within 500m radius.",
+          "url": "http://127.0.0.1:8000/api/routes/nearby?lat=52.379189&lon=4.899431&radius=500&limit=3",
+          "params": {
+            "lat": 52.379189,
+            "lon": 4.899431,
+            "radius": 500,
+            "limit": 3
+          }
+        },
+        {
+          "name": "Expanded Radius (2,000m) with Region Override",
+          "description": "Search routes within a 2km radius locked to netherlands-gtfs.",
+          "url": "http://127.0.0.1:8000/api/routes/nearby?lat=52.379189&lon=4.899431&radius=2000&region=netherlands-gtfs&limit=5",
+          "params": {
+            "lat": 52.379189,
+            "lon": 4.899431,
+            "radius": 2000,
+            "region": "netherlands-gtfs",
+            "limit": 5
+          }
+        }
+      ]
+    },
+    {
+      "id": "routes-running",
+      "category": "Routes & Lines",
+      "endpoint": "/api/routes/running",
+      "method": "GET",
+      "summary": "Currently active / running routes by service calendar",
+      "description": "Checks GTFS calendar, calendar_dates, and trip schedules to return lines currently operating at the specified timestamp.",
+      "parameters": [
+        {
+          "name": "at",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "default": "now",
+          "description": "ISO timestamp or 'now'"
+        },
+        {
+          "name": "region",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Region database override"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "default": 50,
+          "description": "Maximum routes"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Live Active Routes (Right Now)",
+          "description": "Fetch routes currently running right now in the network.",
+          "url": "http://127.0.0.1:8000/api/routes/running?at=now&limit=5",
+          "params": {
+            "at": "now",
+            "limit": 5
+          }
+        },
+        {
+          "name": "Active Routes at Specific Date & Time",
+          "description": "Check which routes are scheduled to run at a specific historical or future date/time.",
+          "url": "http://127.0.0.1:8000/api/routes/running?at=2026-11-05T08:30:00&limit=5",
+          "params": {
+            "at": "2026-11-05T08:30:00",
+            "limit": 5
+          }
+        }
+      ]
+    },
+    {
+      "id": "route-stops",
+      "category": "Routes & Lines",
+      "endpoint": "/api/routes/{route_id}/stops",
+      "method": "GET",
+      "summary": "Ordered stops served by a route",
+      "description": "Returns the complete sequence of physical stops served by a given route, ordered by stop_sequence for outbound and inbound directions.",
+      "parameters": [
+        {
+          "name": "route_id",
+          "in": "path",
+          "type": "string",
+          "required": true,
+          "description": "GTFS route identifier (e.g. '17803')"
+        },
+        {
+          "name": "region",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Region identifier"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Stops Sequence for Route 17803",
+          "description": "Retrieve all stops called by Sprinter line 17803 in sequence.",
+          "url": "http://127.0.0.1:8000/api/routes/17803/stops",
+          "params": {
+            "route_id": "17803"
+          }
+        }
+      ]
+    },
+    {
+      "id": "route-schedule",
+      "category": "Routes & Lines",
+      "endpoint": "/api/routes/{route_id}/schedule",
+      "method": "GET",
+      "summary": "Full timetable and schedule for a route",
+      "description": "Returns scheduled trip departures across calendar service days for a route.",
+      "parameters": [
+        {
+          "name": "route_id",
+          "in": "path",
+          "type": "string",
+          "required": true,
+          "description": "GTFS route ID"
+        },
+        {
+          "name": "region",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Region database"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Route 17803 Complete Timetable",
+          "description": "View scheduled departure times and trip IDs for route 17803.",
+          "url": "http://127.0.0.1:8000/api/routes/17803/schedule",
+          "params": {
+            "route_id": "17803"
+          }
+        }
+      ]
+    },
+    {
+      "id": "route-shapes",
+      "category": "Routes & Lines",
+      "endpoint": "/api/routes/{route_id}/shapes",
+      "method": "GET",
+      "summary": "Shape geometries and polylines for a route",
+      "description": "Returns shape points (latitude, longitude, sequence) for rendering route paths on Leaflet, Mapbox, or Google Maps.",
+      "parameters": [
+        {
+          "name": "route_id",
+          "in": "path",
+          "type": "string",
+          "required": true,
+          "description": "GTFS route ID"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Fetch Map Polyline Coordinates for Route 17803",
+          "description": "Get map line geometry for route 17803.",
+          "url": "http://127.0.0.1:8000/api/routes/17803/shapes",
+          "params": {
+            "route_id": "17803"
+          }
+        }
+      ]
+    },
+    {
+      "id": "route-next-departures",
+      "category": "Routes & Lines",
+      "endpoint": "/api/routes/{route_id}/next-departures",
+      "method": "GET",
+      "summary": "Next upcoming departures for a route",
+      "description": "Upcoming departure times for a route from the current time.",
+      "parameters": [
+        {
+          "name": "route_id",
+          "in": "path",
+          "type": "string",
+          "required": true,
+          "description": "GTFS route ID"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "default": 5,
+          "description": "Number of departures"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Next 5 Departures for Route 17803",
+          "description": "Get upcoming departures for route 17803.",
+          "url": "http://127.0.0.1:8000/api/routes/17803/next-departures?limit=5",
+          "params": {
+            "route_id": "17803",
+            "limit": 5
+          }
+        }
+      ]
+    },
+    {
+      "id": "stops-nearby",
+      "category": "Stops & Stations",
+      "endpoint": "/api/stops/nearby",
+      "method": "GET",
+      "summary": "Find transit stops near coordinates",
+      "description": "Finds stops within radius meters, computes distance from user coordinates, and lists active routes calling at each stop.",
+      "parameters": [
+        {
+          "name": "lat",
+          "in": "query",
+          "type": "float",
+          "required": true,
+          "description": "Latitude"
+        },
+        {
+          "name": "lon",
+          "in": "query",
+          "type": "float",
+          "required": true,
+          "description": "Longitude"
+        },
+        {
+          "name": "radius",
+          "in": "query",
+          "type": "float",
+          "required": false,
+          "default": 500,
+          "description": "Radius in meters"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "default": 50,
+          "description": "Maximum stops to return"
+        },
+        {
+          "name": "region",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Region override"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Stops within 500m of Coordinates",
+          "description": "Find closest 5 stops near Amsterdam Centraal.",
+          "url": "http://127.0.0.1:8000/api/stops/nearby?lat=52.379189&lon=4.899431&radius=500&limit=5",
+          "params": {
+            "lat": 52.379189,
+            "lon": 4.899431,
+            "radius": 500,
+            "limit": 5
+          }
+        },
+        {
+          "name": "Custom 1km Search with Region",
+          "description": "Find stops in a 1,000m radius specifically in netherlands-gtfs.",
+          "url": "http://127.0.0.1:8000/api/stops/nearby?lat=52.379189&lon=4.899431&radius=1000&region=netherlands-gtfs&limit=10",
+          "params": {
+            "lat": 52.379189,
+            "lon": 4.899431,
+            "radius": 1000,
+            "region": "netherlands-gtfs",
+            "limit": 10
+          }
+        }
+      ]
+    },
+    {
+      "id": "stops-bbox",
+      "category": "Stops & Stations",
+      "endpoint": "/api/stops/bbox",
+      "method": "GET",
+      "summary": "Stops within map viewport bounding box",
+      "description": "Queries all stops located within specified latitude/longitude bounding box for dynamic map viewport loading.",
+      "parameters": [
+        {
+          "name": "min_lat",
+          "in": "query",
+          "type": "float",
+          "required": true,
+          "description": "South boundary latitude"
+        },
+        {
+          "name": "min_lon",
+          "in": "query",
+          "type": "float",
+          "required": true,
+          "description": "West boundary longitude"
+        },
+        {
+          "name": "max_lat",
+          "in": "query",
+          "type": "float",
+          "required": true,
+          "description": "North boundary latitude"
+        },
+        {
+          "name": "max_lon",
+          "in": "query",
+          "type": "float",
+          "required": true,
+          "description": "East boundary longitude"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "default": 200,
+          "description": "Max stops"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Map Viewport Query (Amsterdam Center)",
+          "description": "Fetch stops within bounding box of central Amsterdam.",
+          "url": "http://127.0.0.1:8000/api/stops/bbox?min_lat=52.36&min_lon=4.88&max_lat=52.39&max_lon=4.92&limit=50",
+          "params": {
+            "min_lat": 52.36,
+            "min_lon": 4.88,
+            "max_lat": 52.39,
+            "max_lon": 4.92,
+            "limit": 50
+          }
+        }
+      ]
+    },
+    {
+      "id": "stop-routes",
+      "category": "Stops & Stations",
+      "endpoint": "/api/stops/{stop_id}/routes",
+      "method": "GET",
+      "summary": "Routes servicing a specific stop",
+      "description": "Lists all transit lines and routes calling at a given stop identifier.",
+      "parameters": [
+        {
+          "name": "stop_id",
+          "in": "path",
+          "type": "string",
+          "required": true,
+          "description": "GTFS stop ID"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Lines Calling at Stop 2992191 (Amsterdam Centraal)",
+          "description": "Retrieve all lines that call at Amsterdam Centraal stop ID 2992191.",
+          "url": "http://127.0.0.1:8000/api/stops/2992191/routes",
+          "params": {
+            "stop_id": "2992191"
+          }
+        }
+      ]
+    },
+    {
+      "id": "stop-events",
+      "category": "Stops & Stations",
+      "endpoint": "/api/stops/{stop_id}/events",
+      "method": "GET",
+      "summary": "Stop arrival / departure event timeline",
+      "description": "Chronological events timeline for a stop across all trips.",
+      "parameters": [
+        {
+          "name": "stop_id",
+          "in": "path",
+          "type": "string",
+          "required": true,
+          "description": "GTFS stop ID"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "default": 20,
+          "description": "Number of events"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Chronological Events at Stop 2992191",
+          "description": "View next 10 arrival/departure events at Amsterdam Centraal.",
+          "url": "http://127.0.0.1:8000/api/stops/2992191/events?limit=10",
+          "params": {
+            "stop_id": "2992191",
+            "limit": 10
+          }
+        }
+      ]
+    },
+    {
+      "id": "gtfs-stops-catalog",
+      "category": "Stops & Stations",
+      "endpoint": "/api/gtfs-stops",
+      "method": "GET",
+      "summary": "Paginated GTFS stop catalog",
+      "description": "Full stops table search and export, with optional filtering by agency.",
+      "parameters": [
+        {
+          "name": "limit",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "default": 50,
+          "description": "Max stops"
+        },
+        {
+          "name": "offset",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "default": 0,
+          "description": "Offset"
+        },
+        {
+          "name": "q",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Search stop name or code"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Search Stops by Name",
+          "description": "Search for stops with 'Centraal' in their name.",
+          "url": "http://127.0.0.1:8000/api/gtfs-stops?q=Centraal&limit=5",
+          "params": {
+            "q": "Centraal",
+            "limit": 5
+          }
+        }
+      ]
+    },
+    {
+      "id": "departures-nearby",
+      "category": "Departures & Timetables",
+      "endpoint": "/api/departures/nearby",
+      "method": "GET",
+      "summary": "Live / upcoming departures across all nearby stops",
+      "description": "Aggregates next departures from all transit stops within radius of coordinates.",
+      "parameters": [
+        {
+          "name": "lat",
+          "in": "query",
+          "type": "float",
+          "required": true,
+          "description": "Latitude"
+        },
+        {
+          "name": "lon",
+          "in": "query",
+          "type": "float",
+          "required": true,
+          "description": "Longitude"
+        },
+        {
+          "name": "radius",
+          "in": "query",
+          "type": "float",
+          "required": false,
+          "default": 200,
+          "description": "Radius in meters"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "default": 3,
+          "description": "Departures per route and direction"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Live Station Board Near Coordinates",
+          "description": "Fetch upcoming departures around Amsterdam Centraal station coordinates.",
+          "url": "http://127.0.0.1:8000/api/departures/nearby?lat=52.379189&lon=4.899431&radius=300&limit=3",
+          "params": {
+            "lat": 52.379189,
+            "lon": 4.899431,
+            "radius": 300,
+            "limit": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "stop-next-departures",
+      "category": "Departures & Timetables",
+      "endpoint": "/api/stops/{stop_id}/next-departures",
+      "method": "GET",
+      "summary": "Next departures from a specific stop",
+      "description": "Live upcoming departures from a single stop with route short names, destinations, and scheduled times.",
+      "parameters": [
+        {
+          "name": "stop_id",
+          "in": "path",
+          "type": "string",
+          "required": true,
+          "description": "GTFS stop ID"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "default": 5,
+          "description": "Number of departures"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Next Departures for Stop 2992191",
+          "description": "Upcoming departures from Amsterdam Centraal platform 2992191.",
+          "url": "http://127.0.0.1:8000/api/stops/2992191/next-departures?limit=5",
+          "params": {
+            "stop_id": "2992191",
+            "limit": 5
+          }
+        }
+      ]
+    },
+    {
+      "id": "stop-next-departures-both",
+      "category": "Departures & Timetables",
+      "endpoint": "/api/stops/{stop_id}/next-departures-both",
+      "method": "GET",
+      "summary": "Next departures for both forward and reverse directions",
+      "description": "Retrieves next departures grouped by direction (inbound / outbound) for a stop.",
+      "parameters": [
+        {
+          "name": "stop_id",
+          "in": "path",
+          "type": "string",
+          "required": true,
+          "description": "GTFS stop ID"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "default": 3,
+          "description": "Departures per direction"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Bidirectional Departures at Stop 2992191",
+          "description": "Fetch upcoming departures in both travel directions.",
+          "url": "http://127.0.0.1:8000/api/stops/2992191/next-departures-both?limit=3",
+          "params": {
+            "stop_id": "2992191",
+            "limit": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "trips-lookup",
+      "category": "Trips & Stop Times",
+      "endpoint": "/api/trips/lookup",
+      "method": "GET",
+      "summary": "Single or bulk trip lookup via query parameter",
+      "description": "Lookup trip metadata (route_id, service_id, headsign, direction_id) by trip IDs.",
+      "parameters": [
+        {
+          "name": "trip_ids",
+          "in": "query",
+          "type": "string",
+          "required": true,
+          "description": "Comma-separated trip IDs"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Trip Information Lookup",
+          "description": "Lookup details for a specific trip ID.",
+          "url": "http://127.0.0.1:8000/api/trips/lookup?trip_ids=1",
+          "params": {
+            "trip_ids": "1"
+          }
+        }
+      ]
+    },
+    {
+      "id": "trip-stop-times",
+      "category": "Trips & Stop Times",
+      "endpoint": "/api/trips/{trip_id}/stop-times",
+      "method": "GET",
+      "summary": "Stop-by-stop timetable for a trip",
+      "description": "Full itinerary of a trip: all calling stops, scheduled arrival times, and departure times in chronological order.",
+      "parameters": [
+        {
+          "name": "trip_id",
+          "in": "path",
+          "type": "string",
+          "required": true,
+          "description": "GTFS trip ID"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Complete Stop Times for Trip 1",
+          "description": "View scheduled stops and arrival times for trip ID 1.",
+          "url": "http://127.0.0.1:8000/api/trips/1/stop-times",
+          "params": {
+            "trip_id": "1"
+          }
+        }
+      ]
+    },
+    {
+      "id": "shapes-list",
+      "category": "Shapes & Geometry",
+      "endpoint": "/api/shapes",
+      "method": "GET",
+      "summary": "List all GTFS shape identifiers",
+      "description": "Returns list of all distinct shape IDs and point counts in the active database.",
+      "parameters": [
+        {
+          "name": "limit",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "default": 50,
+          "description": "Max shapes"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Browse Available Shape IDs",
+          "description": "Fetch first 10 shape records.",
+          "url": "http://127.0.0.1:8000/api/shapes?limit=10",
+          "params": {
+            "limit": 10
+          }
+        }
+      ]
+    },
+    {
+      "id": "shapes-between",
+      "category": "Shapes & Geometry",
+      "endpoint": "/api/shapes/between",
+      "method": "GET",
+      "summary": "Shape geometries connecting two stops",
+      "description": "Finds route shapes that travel between a specified origin stop and destination stop.",
+      "parameters": [
+        {
+          "name": "from_stop_id",
+          "in": "query",
+          "type": "string",
+          "required": true,
+          "description": "Origin stop ID"
+        },
+        {
+          "name": "to_stop_id",
+          "in": "query",
+          "type": "string",
+          "required": true,
+          "description": "Destination stop ID"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Find Route Shape Between Two Stations",
+          "description": "Query shape connecting two stop IDs.",
+          "url": "http://127.0.0.1:8000/api/shapes/between?from_stop_id=2992191&to_stop_id=2992192",
+          "params": {
+            "from_stop_id": "2992191",
+            "to_stop_id": "2992192"
+          }
+        }
+      ]
+    },
+    {
+      "id": "agencies-list",
+      "category": "Transit Agencies",
+      "endpoint": "/api/agencies",
+      "method": "GET",
+      "summary": "List all transit operators/agencies",
+      "description": "Returns all transit agencies (NS, Arriva, Connexxion, GVB, Keolis, etc.) along with the total number of routes each agency operates.",
+      "parameters": [
+        {
+          "name": "region",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "description": "Filter by region database"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "List Operators in Active Database",
+          "description": "Get all transit agencies and their route counts in the Netherlands GTFS database.",
+          "url": "http://127.0.0.1:8000/api/agencies?region=netherlands-gtfs",
+          "params": {
+            "region": "netherlands-gtfs"
+          }
+        }
+      ]
+    },
+    {
+      "id": "agency-detail",
+      "category": "Transit Agencies",
+      "endpoint": "/api/agencies/{agency_id}",
+      "method": "GET",
+      "summary": "Detailed profile for an agency",
+      "description": "Returns agency name, official website URL, timezone, language, and customer phone number.",
+      "parameters": [
+        {
+          "name": "agency_id",
+          "in": "path",
+          "type": "string",
+          "required": true,
+          "description": "Agency ID (e.g. 'IFF:ns')"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Inspect Agency Profile (NS)",
+          "description": "Retrieve contact details and website for Nederlandse Spoorwegen (IFF:ns).",
+          "url": "http://127.0.0.1:8000/api/agencies/IFF:ns",
+          "params": {
+            "agency_id": "IFF:ns"
+          }
+        }
+      ]
+    },
+    {
+      "id": "agency-routes",
+      "category": "Transit Agencies",
+      "endpoint": "/api/agencies/{agency_id}/routes",
+      "method": "GET",
+      "summary": "Routes operated by an agency",
+      "description": "Returns all bus/train/transit lines operated by a specific agency.",
+      "parameters": [
+        {
+          "name": "agency_id",
+          "in": "path",
+          "type": "string",
+          "required": true,
+          "description": "Agency ID"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "default": 50,
+          "description": "Max routes"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Routes Operated by NS",
+          "description": "Fetch top 5 lines operated by NS.",
+          "url": "http://127.0.0.1:8000/api/agencies/IFF:ns/routes?limit=5",
+          "params": {
+            "agency_id": "IFF:ns",
+            "limit": 5
+          }
+        }
+      ]
+    },
+    {
+      "id": "agency-stops",
+      "category": "Transit Agencies",
+      "endpoint": "/api/agencies/{agency_id}/stops",
+      "method": "GET",
+      "summary": "Stops served by an agency",
+      "description": "Returns all physical stations and stops called by an agency's trips.",
+      "parameters": [
+        {
+          "name": "agency_id",
+          "in": "path",
+          "type": "string",
+          "required": true,
+          "description": "Agency ID"
+        },
+        {
+          "name": "limit",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "default": 50,
+          "description": "Max stops"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Stations Served by NS",
+          "description": "Fetch top 5 stations called by NS trains.",
+          "url": "http://127.0.0.1:8000/api/agencies/IFF:ns/stops?limit=5",
+          "params": {
+            "agency_id": "IFF:ns",
+            "limit": 5
+          }
+        }
+      ]
+    },
+    {
+      "id": "realtime-status",
+      "category": "Realtime GTFS-RT (Delays, Vehicles, Alerts)",
+      "endpoint": "/api/realtime/status",
+      "method": "GET",
+      "summary": "Realtime background poller health & feed state",
+      "description": "Returns health status of background poller, leader election status, active feed timestamps, and total cached entity counts (trips, vehicles, alerts).",
+      "parameters": [],
+      "scenarios": [
+        {
+          "name": "Check Realtime System Health & Feeds Freshness",
+          "description": "Verify background feed polling status, HTTP response codes, and ETag cache status.",
+          "url": "http://127.0.0.1:8000/api/realtime/status",
+          "params": {}
+        }
+      ]
+    },
+    {
+      "id": "realtime-trip-updates",
+      "category": "Realtime GTFS-RT (Delays, Vehicles, Alerts)",
+      "endpoint": "/api/realtime/trip-updates",
+      "method": "GET",
+      "summary": "Active live trip updates and delays",
+      "description": "Paginated list of all active GTFS-RT trip updates, delays (in seconds), platform reassignments, and cancellations.",
+      "parameters": [
+        {
+          "name": "limit",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "default": 50,
+          "description": "Max updates"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Fetch Latest Active Delays",
+          "description": "Retrieve 10 current live trip delay updates across the network.",
+          "url": "http://127.0.0.1:8000/api/realtime/trip-updates?limit=10",
+          "params": {
+            "limit": 10
+          }
+        }
+      ]
+    },
+    {
+      "id": "realtime-vehicle-positions",
+      "category": "Realtime GTFS-RT (Delays, Vehicles, Alerts)",
+      "endpoint": "/api/realtime/vehicle-positions",
+      "method": "GET",
+      "summary": "Live GPS coordinates of transit vehicles",
+      "description": "Returns current GPS latitude/longitude, bearing, speed, and occupancy status of active vehicles on the map.",
+      "parameters": [
+        {
+          "name": "limit",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "default": 50,
+          "description": "Max vehicles"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Live Vehicle Map Tracking",
+          "description": "Fetch live positions of 20 active transit vehicles for map visualization.",
+          "url": "http://127.0.0.1:8000/api/realtime/vehicle-positions?limit=20",
+          "params": {
+            "limit": 20
+          }
+        }
+      ]
+    },
+    {
+      "id": "realtime-alerts",
+      "category": "Realtime GTFS-RT (Delays, Vehicles, Alerts)",
+      "endpoint": "/api/realtime/alerts",
+      "method": "GET",
+      "summary": "Live service alerts and disruptions",
+      "description": "Returns active disruptions, track maintenance, cancellations, and causes across routes and stations.",
+      "parameters": [
+        {
+          "name": "limit",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "default": 50,
+          "description": "Max alerts"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "View Active Network Disruptions",
+          "description": "Check for current service advisories and track work announcements.",
+          "url": "http://127.0.0.1:8000/api/realtime/alerts?limit=10",
+          "params": {
+            "limit": 10
+          }
+        }
+      ]
+    },
+    {
+      "id": "realtime-route-live",
+      "category": "Realtime GTFS-RT (Delays, Vehicles, Alerts)",
+      "endpoint": "/api/realtime/routes/{route_id}",
+      "method": "GET",
+      "summary": "Live realtime feed for a single route",
+      "description": "Aggregates live trip updates, moving vehicle positions, and relevant service alerts for a specific line.",
+      "parameters": [
+        {
+          "name": "route_id",
+          "in": "path",
+          "type": "string",
+          "required": true,
+          "description": "GTFS route ID"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Live Tracking for Route 17803",
+          "description": "Fetch real-time delays, active vehicles, and alerts for route 17803.",
+          "url": "http://127.0.0.1:8000/api/realtime/routes/17803",
+          "params": {
+            "route_id": "17803"
+          }
+        }
+      ]
+    },
+    {
+      "id": "realtime-stop-live",
+      "category": "Realtime GTFS-RT (Delays, Vehicles, Alerts)",
+      "endpoint": "/api/realtime/stops/{stop_id}",
+      "method": "GET",
+      "summary": "Live departures and alerts for a stop",
+      "description": "Real-time departure board for a physical stop including live delays and platform changes.",
+      "parameters": [
+        {
+          "name": "stop_id",
+          "in": "path",
+          "type": "string",
+          "required": true,
+          "description": "GTFS stop ID"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Live Departure Board at Stop 2992191",
+          "description": "Live departure board with delay seconds at Amsterdam Centraal.",
+          "url": "http://127.0.0.1:8000/api/realtime/stops/2992191",
+          "params": {
+            "stop_id": "2992191"
+          }
+        }
+      ]
+    },
+    {
+      "id": "network-stats",
+      "category": "Network Statistics, Journeys & OSM Mapping",
+      "endpoint": "/api/stats",
+      "method": "GET",
+      "summary": "High-level database entity statistics",
+      "description": "Returns counts of routes, stops, trips, calendar service days, and agencies in the active database.",
+      "parameters": [],
+      "scenarios": [
+        {
+          "name": "Database Overview Stats",
+          "description": "Inspect total numbers across the transit network.",
+          "url": "http://127.0.0.1:8000/api/stats",
+          "params": {}
+        }
+      ]
+    },
+    {
+      "id": "gtfs-count",
+      "category": "Network Statistics, Journeys & OSM Mapping",
+      "endpoint": "/api/gtfs-count",
+      "method": "GET",
+      "summary": "Quick route and stop counts",
+      "description": "Fast count of total routes and stops without loading full tables.",
+      "parameters": [],
+      "scenarios": [
+        {
+          "name": "Quick Count",
+          "description": "Retrieve total route and stop counts.",
+          "url": "http://127.0.0.1:8000/api/gtfs-count",
+          "params": {}
+        }
+      ]
+    },
+    {
+      "id": "journeys-planner",
+      "category": "Network Statistics, Journeys & OSM Mapping",
+      "endpoint": "/api/journeys",
+      "method": "GET",
+      "summary": "Point-to-point journey planner between stops",
+      "description": "Finds direct routes and departure options connecting origin stop and destination stop.",
+      "parameters": [
+        {
+          "name": "from_stop_id",
+          "in": "query",
+          "type": "string",
+          "required": true,
+          "description": "Origin stop ID"
+        },
+        {
+          "name": "to_stop_id",
+          "in": "query",
+          "type": "string",
+          "required": true,
+          "description": "Destination stop ID"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "Plan Journey Between Two Stations",
+          "description": "Find direct connection options between two stops.",
+          "url": "http://127.0.0.1:8000/api/journeys?from_stop_id=2992191&to_stop_id=2992192",
+          "params": {
+            "from_stop_id": "2992191",
+            "to_stop_id": "2992192"
+          }
+        }
+      ]
+    },
+    {
+      "id": "osm-mapping",
+      "category": "Network Statistics, Journeys & OSM Mapping",
+      "endpoint": "/api/mapping",
+      "method": "GET",
+      "summary": "GTFS to OpenStreetMap stop matching",
+      "description": "Returns matched GTFS stop and OSM node pairs with matched distances.",
+      "parameters": [
+        {
+          "name": "limit",
+          "in": "query",
+          "type": "int",
+          "required": false,
+          "default": 50,
+          "description": "Max mappings"
+        }
+      ],
+      "scenarios": [
+        {
+          "name": "View Matched GTFS and OSM Stops",
+          "description": "Fetch 10 matched GTFS-OSM stop mappings.",
+          "url": "http://127.0.0.1:8000/api/mapping?limit=10",
+          "params": {
+            "limit": 10
+          }
+        }
+      ]
+    }
+  ]
+}

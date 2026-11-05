@@ -22,7 +22,7 @@ from contextlib import contextmanager, asynccontextmanager
 from datetime import date, datetime, time, timedelta
 import math
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Query, Response
@@ -302,6 +302,41 @@ def _list_available_sqlite_paths() -> list[Path]:
     return sorted(found, key=lambda p: p.name)
 
 
+ROUTE_TYPE_NAMES: Dict[int, str] = {
+    0: "tram",
+    1: "subway",
+    2: "rail",
+    3: "bus",
+    4: "ferry",
+    5: "cable_car",
+    6: "gondola",
+    7: "funicular",
+    11: "trolleybus",
+    12: "monorail",
+}
+
+
+def _route_type_to_mode(rtype: int) -> str:
+    """Map GTFS and extended NeTEx/HVT route_type integer to human-friendly transit mode name."""
+    if rtype in ROUTE_TYPE_NAMES:
+        return ROUTE_TYPE_NAMES[rtype]
+    if 100 <= rtype <= 117:
+        return "rail"
+    if 200 <= rtype <= 209:
+        return "coach"
+    if 400 <= rtype <= 405:
+        return "subway"
+    if 700 <= rtype <= 717:
+        return "bus"
+    if 800 <= rtype <= 802:
+        return "trolleybus"
+    if 900 <= rtype <= 907:
+        return "tram"
+    if 1000 <= rtype <= 1002:
+        return "ferry"
+    return "other"
+
+
 def _inspect_database(db_path: Path, force_refresh: bool = False) -> dict:
     """
     Dynamically inspect an SQLite GTFS database and extract metadata, bounds, and stats.
@@ -360,8 +395,26 @@ def _inspect_database(db_path: Path, force_refresh: bool = False) -> dict:
                     "max_lon": row[3],
                 }
 
+        transit_modes = []
+        route_types = []
         if "routes" in tables:
             stats["routes"] = cur.execute("SELECT COUNT(*) FROM routes").fetchone()[0]
+            try:
+                type_rows = cur.execute(
+                    "SELECT DISTINCT route_type FROM routes WHERE route_type IS NOT NULL"
+                ).fetchall()
+                modes_set = set()
+                for tr in type_rows:
+                    try:
+                        rtype = int(tr[0])
+                        route_types.append(rtype)
+                        modes_set.add(_route_type_to_mode(rtype))
+                    except (ValueError, TypeError):
+                        pass
+                transit_modes = sorted(list(modes_set))
+                route_types.sort()
+            except Exception:
+                pass
         if "trips" in tables:
             stats["trips"] = cur.execute("SELECT COUNT(*) FROM trips").fetchone()[0]
         stats["agencies"] = len(agencies)
@@ -383,6 +436,8 @@ def _inspect_database(db_path: Path, force_refresh: bool = False) -> dict:
         "name": name,
         "region": region_name,
         "database": db_path.name,
+        "transit_modes": transit_modes,
+        "route_types": route_types,
         "database_path": str(db_path.resolve()),
         "size_mb": round(stat.st_size / (1024 * 1024), 2),
         "size_bytes": stat.st_size,
@@ -738,6 +793,7 @@ def list_regions_simple():
             "id": r["id"],
             "name": r["name"],
             "database": r["database"],
+            "transit_modes": r.get("transit_modes", []),
         }
         for r in regions
     ]
@@ -1367,6 +1423,34 @@ def _search_active_routes_hierarchy(
     }
 
 
+def _safe_header_value(val: Any) -> str:
+    """Safely format string for HTTP header (RFC 7230 / latin-1). URL-quotes non-latin-1 characters."""
+    if val is None:
+        return ""
+    s = str(val).strip()
+    try:
+        s.encode("latin-1")
+        return s
+    except UnicodeEncodeError:
+        import urllib.parse
+        return urllib.parse.quote(s)
+
+
+def _apply_search_headers(response: Optional[Response], res: Dict[str, Any]) -> None:
+    if not response or not isinstance(res, dict):
+        return
+    if "level" in res:
+        response.headers["X-Search-Level"] = str(res.get("level", "none"))
+    geo = res.get("geo") or {}
+    if geo.get("city"):
+        response.headers["X-Resolved-City"] = _safe_header_value(geo["city"])
+    if geo.get("country"):
+        response.headers["X-Resolved-Country"] = _safe_header_value(geo["country"])
+    if res.get("database"):
+        response.headers["X-Resolved-Database"] = _safe_header_value(res["database"])
+    response.headers["Cache-Control"] = "public, max-age=60"
+
+
 @app.get("/api/routes/search-hierarchy")
 @app.get("/api/routes/nearby-hierarchy")
 def routes_search_hierarchy(
@@ -1398,15 +1482,7 @@ def routes_search_hierarchy(
         route_type=route_type,
         region=selected_region,
     )
-    if response:
-        response.headers["X-Search-Level"] = str(res.get("level", "none"))
-        if res.get("geo", {}).get("city"):
-            response.headers["X-Resolved-City"] = str(res["geo"]["city"])
-        if res.get("geo", {}).get("country"):
-            response.headers["X-Resolved-Country"] = str(res["geo"]["country"])
-        if res.get("database"):
-            response.headers["X-Resolved-Database"] = str(res["database"])
-        response.headers["Cache-Control"] = "public, max-age=60"
+    _apply_search_headers(response, res)
     return res
 
 
@@ -1420,6 +1496,7 @@ def stops_search_hierarchy(
     route_type: Optional[int] = Query(default=None, description="Optional GTFS route_type filter"),
     group_parent: bool = Query(default=True, description="Group platforms under parent_station"),
     region: Optional[str] = Query(default=None, description="Optional region / database override"),
+    region_id: Optional[str] = Query(default=None, description="Alias for region identifier"),
     type: str = Query(default="routes", description="What to display in hierarchy: 'routes' (default) or 'stops'"),
     response: Response = None,
 ):
@@ -1446,15 +1523,7 @@ def stops_search_hierarchy(
             route_type=route_type,
             region=region_id or region,
         )
-    if response:
-        response.headers["X-Search-Level"] = str(res.get("level", "none"))
-        if res.get("geo", {}).get("city"):
-            response.headers["X-Resolved-City"] = str(res["geo"]["city"])
-        if res.get("geo", {}).get("country"):
-            response.headers["X-Resolved-Country"] = str(res["geo"]["country"])
-        if res.get("database"):
-            response.headers["X-Resolved-Database"] = str(res["database"])
-        response.headers["Cache-Control"] = "public, max-age=60"
+    _apply_search_headers(response, res)
     return res
 
 
@@ -1526,15 +1595,7 @@ def stops_nearby(
             "stops": stops,
         }
 
-    if response:
-        response.headers["X-Search-Level"] = str(res.get("level", "none"))
-        if res.get("geo", {}).get("city"):
-            response.headers["X-Resolved-City"] = str(res["geo"]["city"])
-        if res.get("geo", {}).get("country"):
-            response.headers["X-Resolved-Country"] = str(res["geo"]["country"])
-        if res.get("database"):
-            response.headers["X-Resolved-Database"] = str(res["database"])
-        response.headers["Cache-Control"] = "public, max-age=60"
+    _apply_search_headers(response, res)
 
     if hierarchy:
         return res
@@ -1605,15 +1666,7 @@ def routes_nearby(
             "routes": routes,
         }
 
-    if response:
-        response.headers["X-Search-Level"] = str(res.get("level", "none"))
-        if res.get("geo", {}).get("city"):
-            response.headers["X-Resolved-City"] = str(res["geo"]["city"])
-        if res.get("geo", {}).get("country"):
-            response.headers["X-Resolved-Country"] = str(res["geo"]["country"])
-        if res.get("database"):
-            response.headers["X-Resolved-Database"] = str(res["database"])
-        response.headers["Cache-Control"] = "public, max-age=60"
+    _apply_search_headers(response, res)
 
     if hierarchy:
         return res
