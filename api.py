@@ -18,6 +18,8 @@ import json
 import os
 import re
 import sqlite3
+import threading
+import time as _time
 from contextlib import contextmanager, asynccontextmanager
 from datetime import date, datetime, time, timedelta
 import math
@@ -136,6 +138,12 @@ VITE_PORT = int(os.environ.get("VITE_PORT", 5173))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    try:
+        import asyncio
+        await asyncio.to_thread(_ensure_multi_db_index_synced)
+    except Exception as exc:
+        import logging
+        logging.getLogger("api").warning("Failed to warm multi-db index: %s", exc)
     poller = None
     if os.environ.get("REALTIME_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on"):
         try:
@@ -212,22 +220,32 @@ def root():
     return RedirectResponse(url="/static/routes.html")
 
 
+_WAL_INITIALIZED_DBS: set[str] = set()
+_WAL_LOCK = threading.Lock()
+
+
 @contextmanager
 def _open_db(db_path: Path):
-    """Open an SQLite database connection with optimized WAL pragmas."""
+    """Open an SQLite database connection with optimized read pragmas."""
     if not db_path.exists():
         raise HTTPException(
             status_code=503,
             detail=f"Database not found at {db_path}.",
         )
+    resolved_key = str(db_path.resolve())
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    # WAL mode: readers don't block writers and vice versa; larger cache speeds
-    # up join-heavy queries; memory-mapped I/O avoids syscall overhead.
-    conn.execute("PRAGMA journal_mode=WAL")
+    if resolved_key not in _WAL_INITIALIZED_DBS:
+        with _WAL_LOCK:
+            if resolved_key not in _WAL_INITIALIZED_DBS:
+                try:
+                    conn.execute("PRAGMA journal_mode=WAL")
+                except Exception:
+                    pass
+                _WAL_INITIALIZED_DBS.add(resolved_key)
+    # Larger cache speeds up join-heavy queries; memory-mapped I/O avoids syscall overhead.
     conn.execute("PRAGMA cache_size=-32768")   # 32 MB page cache
     conn.execute("PRAGMA mmap_size=268435456") # 256 MB memory-mapped I/O
-    conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA temp_store=MEMORY")
     try:
         yield conn
@@ -337,30 +355,173 @@ def _route_type_to_mode(rtype: int) -> str:
     return "other"
 
 
+MULTI_DB_INDEX_PATH = Path(__file__).parent / ".gtfs_multi_db_index.db"
+_MULTI_DB_LOCK = threading.RLock()
+_MULTI_DB_READY = False
+_MULTI_DB_SIG: Optional[tuple] = None
+_MULTI_DB_LAST_CHECK_TS: float = 0.0
+
+_LIGHT_INDEX_SPECS = [
+    ("idx_routes_short_name", "routes", ["route_short_name"]),
+    ("idx_routes_long_name", "routes", ["route_long_name"]),
+    ("idx_routes_type", "routes", ["route_type"]),
+    ("idx_routes_agency_short", "routes", ["agency_id", "route_short_name"]),
+    ("idx_stops_name", "stops", ["stop_name"]),
+    ("idx_stops_code", "stops", ["stop_code"]),
+    ("idx_stops_parent_station", "stops", ["parent_station"]),
+    ("idx_stops_lat_lon", "stops", ["stop_lat", "stop_lon"]),
+    ("idx_calendar_dates_date", "calendar_dates", ["date"]),
+]
+
+_HEAVY_INDEX_SPECS = [
+    ("idx_stop_times_stop_trip", "stop_times", ["stop_id", "trip_id"]),
+    ("idx_stop_times_trip_stop", "stop_times", ["trip_id", "stop_id"]),
+    ("idx_trips_trip_route_hs", "trips", ["trip_id", "route_id", "trip_headsign"]),
+    ("idx_trips_route_service_trip", "trips", ["route_id", "service_id", "trip_id"]),
+    ("idx_trips_route_headsign", "trips", ["route_id", "trip_headsign"]),
+    ("idx_shapes_id_seq", "shapes", ["shape_id", "shape_pt_sequence"]),
+]
+
+
+def _open_multi_db_index() -> sqlite3.Connection:
+    """Open (and initialize schema for) the persistent multi-DB route/stop/visited index."""
+    conn = sqlite3.connect(MULTI_DB_INDEX_PATH, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA temp_store=MEMORY")
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS indexed_dbs (
+            db_path TEXT PRIMARY KEY,
+            mtime REAL NOT NULL,
+            size INTEGER NOT NULL,
+            region_json TEXT
+        );
+        CREATE TABLE IF NOT EXISTS route_index (
+            route_id TEXT NOT NULL,
+            db_path TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_route_index_id ON route_index (route_id);
+        CREATE INDEX IF NOT EXISTS idx_route_index_db ON route_index (db_path);
+        CREATE TABLE IF NOT EXISTS stop_index (
+            stop_id TEXT NOT NULL,
+            db_path TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_stop_index_id ON stop_index (stop_id);
+        CREATE INDEX IF NOT EXISTS idx_stop_index_db ON stop_index (db_path);
+        CREATE TABLE IF NOT EXISTS agency_index (
+            agency_id TEXT NOT NULL,
+            db_path TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_agency_index_id ON agency_index (agency_id);
+        CREATE INDEX IF NOT EXISTS idx_agency_index_db ON agency_index (db_path);
+        CREATE TABLE IF NOT EXISTS visited_entities (
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            db_path TEXT NOT NULL,
+            db_mtime REAL NOT NULL,
+            last_visited REAL NOT NULL,
+            PRIMARY KEY (entity_type, entity_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_visited_entities_type_id
+            ON visited_entities (entity_type, entity_id);
+        """
+    )
+    return conn
+
+
+def _ensure_sqlite_search_indexes(db_path: Path, size_bytes: int) -> None:
+    """Ensure fast search indexes exist on a newly discovered/updated SQLite DB."""
+    specs = list(_LIGHT_INDEX_SPECS)
+    if size_bytes < 200 * 1024 * 1024:
+        specs.extend(_HEAVY_INDEX_SPECS)
+    try:
+        conn = sqlite3.connect(db_path, check_same_thread=False)
+        existing = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            ).fetchall()
+        }
+        missing_specs = [s for s in specs if s[0] not in existing]
+        if not missing_specs:
+            conn.close()
+            return
+        tables = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        col_cache: dict[str, set[str]] = {}
+        created_any = False
+        for idx_name, tbl, cols in missing_specs:
+            if tbl not in tables:
+                continue
+            if tbl not in col_cache:
+                col_cache[tbl] = {
+                    r[1] for r in conn.execute(f'PRAGMA table_info("{tbl}")').fetchall()
+                }
+            if all(c in col_cache[tbl] for c in cols):
+                cols_sql = ", ".join(f'"{c}"' for c in cols)
+                conn.execute(
+                    f'CREATE INDEX IF NOT EXISTS "{idx_name}" ON "{tbl}" ({cols_sql})'
+                )
+                created_any = True
+        if created_any:
+            conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
 def _inspect_database(db_path: Path, force_refresh: bool = False) -> dict:
     """
     Dynamically inspect an SQLite GTFS database and extract metadata, bounds, and stats.
     All attributes (id, name, region, bounding box) are derived dynamically from
     the database tables without any hardcoded region maps.
     """
-    mtime = db_path.stat().st_mtime
-    cache_key = f"{db_path.resolve()}:{mtime}"
+    stat = db_path.stat()
+    mtime = stat.st_mtime
+    size_bytes = stat.st_size
+    resolved_str = str(db_path.resolve())
+    cache_key = f"{resolved_str}:{mtime}"
     if not force_refresh and cache_key in _REGION_CACHE:
         return _REGION_CACHE[cache_key]
+
+    if not force_refresh:
+        try:
+            with _MULTI_DB_LOCK:
+                idx_conn = _open_multi_db_index()
+                try:
+                    row = idx_conn.execute(
+                        "SELECT region_json FROM indexed_dbs WHERE db_path = ? AND mtime = ? AND size = ?",
+                        (resolved_str, mtime, size_bytes),
+                    ).fetchone()
+                    if row and row[0]:
+                        info = json.loads(row[0])
+                        _REGION_CACHE[cache_key] = info
+                        return info
+                finally:
+                    idx_conn.close()
+        except Exception:
+            pass
 
     reg_id = db_path.stem.lower()
     name = db_path.stem.replace("-gtfs", "").replace("-", " ").replace("_", " ").title()
     aliases = list({db_path.stem, db_path.name, db_path.stem.lower(), db_path.stem.replace("-gtfs", "")})
 
-    stat = db_path.stat()
     agencies: list[dict] = []
     timezone: Optional[str] = None
     feed_info: Optional[dict] = None
     stats: dict = {}
     bbox: Optional[dict] = None
+    transit_modes: list[str] = []
+    route_types: list[int] = []
 
+    conn = None
     try:
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_path, timeout=5.0)
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         tables = {r[0] for r in cur.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -395,8 +556,6 @@ def _inspect_database(db_path: Path, force_refresh: bool = False) -> dict:
                     "max_lon": row[3],
                 }
 
-        transit_modes = []
-        route_types = []
         if "routes" in tables:
             stats["routes"] = cur.execute("SELECT COUNT(*) FROM routes").fetchone()[0]
             try:
@@ -418,9 +577,14 @@ def _inspect_database(db_path: Path, force_refresh: bool = False) -> dict:
         if "trips" in tables:
             stats["trips"] = cur.execute("SELECT COUNT(*) FROM trips").fetchone()[0]
         stats["agencies"] = len(agencies)
-        conn.close()
     except Exception as exc:
         stats["error"] = str(exc)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     # Derive human-friendly region / country name dynamically from metadata
     region_name = name
@@ -438,7 +602,7 @@ def _inspect_database(db_path: Path, force_refresh: bool = False) -> dict:
         "database": db_path.name,
         "transit_modes": transit_modes,
         "route_types": route_types,
-        "database_path": str(db_path.resolve()),
+        "database_path": resolved_str,
         "size_mb": round(stat.st_size / (1024 * 1024), 2),
         "size_bytes": stat.st_size,
         "timezone": timezone,
@@ -448,7 +612,28 @@ def _inspect_database(db_path: Path, force_refresh: bool = False) -> dict:
         "agencies": agencies,
         "aliases": aliases,
     }
-    _REGION_CACHE[cache_key] = info
+    if not stats.get("error"):
+        _REGION_CACHE[cache_key] = info
+        try:
+            with _MULTI_DB_LOCK:
+                idx_conn = _open_multi_db_index()
+                try:
+                    idx_conn.execute(
+                        """
+                        INSERT INTO indexed_dbs (db_path, mtime, size, region_json)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(db_path) DO UPDATE SET
+                            mtime = excluded.mtime,
+                            size = excluded.size,
+                            region_json = excluded.region_json
+                        """,
+                        (resolved_str, mtime, size_bytes, json.dumps(info)),
+                    )
+                    idx_conn.commit()
+                finally:
+                    idx_conn.close()
+        except Exception:
+            pass
     return info
 
 
@@ -495,9 +680,282 @@ def _resolve_region_db(region: str) -> tuple[Path, dict]:
         detail=f"Unknown region / database '{region}'. Available: {', '.join(available)}",
     )
 
-_ROUTE_DB_CACHE: dict = {}
-_STOP_DB_CACHE: dict = {}
-_TRIP_DB_CACHE: dict = {}
+_ROUTE_DB_CACHE: dict[str, Path] = {}
+_STOP_DB_CACHE: dict[str, Path] = {}
+_TRIP_DB_CACHE: dict[str, Path] = {}
+_AGENCY_DB_CACHE: dict[str, Path] = {}
+
+_ENTITY_TABLE_MAP: dict[str, tuple[str, str, dict[str, Path]]] = {
+    "route": ("routes", "route_id", _ROUTE_DB_CACHE),
+    "stop": ("stops", "stop_id", _STOP_DB_CACHE),
+    "trip": ("trips", "trip_id", _TRIP_DB_CACHE),
+    "agency": ("agency", "agency_id", _AGENCY_DB_CACHE),
+}
+
+
+def _sync_single_db_entities(
+    idx_conn: sqlite3.Connection,
+    db_path: Path,
+    mtime: float,
+    size_bytes: int,
+) -> None:
+    """Index all routes, stops, and agencies for a new or modified SQLite DB."""
+    resolved_str = str(db_path.resolve())
+    _ensure_sqlite_search_indexes(db_path, size_bytes)
+
+    src = sqlite3.connect(db_path, check_same_thread=False)
+    try:
+        tables = {
+            r[0]
+            for r in src.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        idx_conn.execute("DELETE FROM route_index WHERE db_path = ?", (resolved_str,))
+        idx_conn.execute("DELETE FROM stop_index WHERE db_path = ?", (resolved_str,))
+        idx_conn.execute("DELETE FROM agency_index WHERE db_path = ?", (resolved_str,))
+        idx_conn.execute("DELETE FROM visited_entities WHERE db_path = ?", (resolved_str,))
+
+        if "routes" in tables:
+            routes_rows = [
+                (r[0], resolved_str)
+                for r in src.execute("SELECT route_id FROM routes WHERE route_id IS NOT NULL")
+            ]
+            idx_conn.executemany(
+                "INSERT INTO route_index (route_id, db_path) VALUES (?, ?)", routes_rows
+            )
+        if "stops" in tables:
+            stops_rows = [
+                (r[0], resolved_str)
+                for r in src.execute("SELECT stop_id FROM stops WHERE stop_id IS NOT NULL")
+            ]
+            idx_conn.executemany(
+                "INSERT INTO stop_index (stop_id, db_path) VALUES (?, ?)", stops_rows
+            )
+        if "agency" in tables:
+            agency_rows = [
+                (r[0], resolved_str)
+                for r in src.execute("SELECT agency_id FROM agency WHERE agency_id IS NOT NULL")
+            ]
+            idx_conn.executemany(
+                "INSERT INTO agency_index (agency_id, db_path) VALUES (?, ?)", agency_rows
+            )
+
+        idx_conn.execute(
+            """
+            INSERT INTO indexed_dbs (db_path, mtime, size, region_json)
+            VALUES (?, ?, ?, NULL)
+            ON CONFLICT(db_path) DO UPDATE SET
+                mtime = excluded.mtime,
+                size = excluded.size,
+                region_json = CASE
+                    WHEN indexed_dbs.mtime = excluded.mtime AND indexed_dbs.size = excluded.size
+                    THEN indexed_dbs.region_json
+                    ELSE NULL
+                END
+            """,
+            (resolved_str, mtime, size_bytes),
+        )
+        idx_conn.commit()
+    finally:
+        src.close()
+
+
+def _hydrate_entity_caches(idx_conn: sqlite3.Connection, default_db: Optional[Path]) -> None:
+    """Load pre-indexed routes, stops, agencies, and visited trips into memory."""
+    default_str = str(default_db.resolve()) if default_db else ""
+    path_objs: dict[str, Path] = {}
+
+    def _as_path(p_str: str) -> Path:
+        obj = path_objs.get(p_str)
+        if obj is None:
+            obj = Path(p_str)
+            path_objs[p_str] = obj
+        return obj
+
+    for table, col, cache in (
+        ("route_index", "route_id", _ROUTE_DB_CACHE),
+        ("stop_index", "stop_id", _STOP_DB_CACHE),
+        ("agency_index", "agency_id", _AGENCY_DB_CACHE),
+    ):
+        cache.clear()
+        # Load non-default DBs first, then default DB so default DB wins on ID collisions.
+        for eid, p_str in idx_conn.execute(
+            f"SELECT {col}, db_path FROM {table} WHERE db_path != ?", (default_str,)
+        ):
+            cache[eid] = _as_path(p_str)
+        if default_str:
+            for eid, p_str in idx_conn.execute(
+                f"SELECT {col}, db_path FROM {table} WHERE db_path = ?", (default_str,)
+            ):
+                cache[eid] = _as_path(p_str)
+
+    # Hydrate visited entities (primarily trip_ids and any dynamically discovered IDs)
+    mtimes = {
+        row[0]: row[1]
+        for row in idx_conn.execute("SELECT db_path, mtime FROM indexed_dbs")
+    }
+    for etype, eid, p_str, db_mtime in idx_conn.execute(
+        "SELECT entity_type, entity_id, db_path, db_mtime FROM visited_entities"
+    ):
+        if mtimes.get(p_str) != db_mtime:
+            continue
+        spec = _ENTITY_TABLE_MAP.get(etype)
+        if spec:
+            _, _, cache = spec
+            if eid not in cache:
+                cache[eid] = _as_path(p_str)
+
+
+def _ensure_multi_db_index_synced(force: bool = False) -> None:
+    """Keep the persistent multi-DB route/stop/visited index and RAM caches in sync."""
+    global _MULTI_DB_READY, _MULTI_DB_SIG, _MULTI_DB_LAST_CHECK_TS
+    now = _time.monotonic()
+    if not force and _MULTI_DB_READY and (now - _MULTI_DB_LAST_CHECK_TS) < 2.0:
+        return
+
+    with _MULTI_DB_LOCK:
+        now = _time.monotonic()
+        if not force and _MULTI_DB_READY and (now - _MULTI_DB_LAST_CHECK_TS) < 2.0:
+            return
+
+        paths = _list_available_sqlite_paths()
+        sig_items = []
+        for p in paths:
+            try:
+                st = p.stat()
+                sig_items.append((str(p.resolve()), st.st_mtime, st.st_size))
+            except OSError:
+                continue
+        sig = tuple(sig_items)
+        _MULTI_DB_LAST_CHECK_TS = now
+
+        if not force and _MULTI_DB_READY and sig == _MULTI_DB_SIG:
+            return
+
+        idx_conn = _open_multi_db_index()
+        try:
+            recorded = {
+                row[0]: (row[1], row[2])
+                for row in idx_conn.execute("SELECT db_path, mtime, size FROM indexed_dbs")
+            }
+            current_map = {p_str: (mtime, size) for p_str, mtime, size in sig_items}
+
+            removed = set(recorded.keys()) - set(current_map.keys())
+            for p_str in removed:
+                idx_conn.execute("DELETE FROM indexed_dbs WHERE db_path = ?", (p_str,))
+                idx_conn.execute("DELETE FROM route_index WHERE db_path = ?", (p_str,))
+                idx_conn.execute("DELETE FROM stop_index WHERE db_path = ?", (p_str,))
+                idx_conn.execute("DELETE FROM agency_index WHERE db_path = ?", (p_str,))
+                idx_conn.execute("DELETE FROM visited_entities WHERE db_path = ?", (p_str,))
+            if removed:
+                idx_conn.commit()
+
+            for p_str, (mtime, size) in current_map.items():
+                if recorded.get(p_str) != (mtime, size):
+                    _sync_single_db_entities(idx_conn, Path(p_str), mtime, size)
+
+            default_db = DB_PATHS.get(DEFAULT_MODE) or DB_PATH
+            _hydrate_entity_caches(idx_conn, default_db)
+            _MULTI_DB_SIG = sig
+            _MULTI_DB_READY = True
+        finally:
+            idx_conn.close()
+
+
+def _record_visited_entity(entity_type: str, entity_id: str, db_path: Path) -> None:
+    """Persist a visited entity -> database mapping for instant cross-restart lookups."""
+    spec = _ENTITY_TABLE_MAP.get(entity_type)
+    if spec:
+        spec[2][entity_id] = db_path
+    try:
+        st = db_path.stat()
+        resolved_str = str(db_path.resolve())
+        with _MULTI_DB_LOCK:
+            idx_conn = _open_multi_db_index()
+            try:
+                idx_conn.execute(
+                    """
+                    INSERT INTO visited_entities (entity_type, entity_id, db_path, db_mtime, last_visited)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(entity_type, entity_id) DO UPDATE SET
+                        db_path = excluded.db_path,
+                        db_mtime = excluded.db_mtime,
+                        last_visited = excluded.last_visited
+                    """,
+                    (entity_type, entity_id, resolved_str, st.st_mtime, _time.time()),
+                )
+                idx_conn.commit()
+            finally:
+                idx_conn.close()
+    except Exception:
+        pass
+
+
+def _find_db_for_entity(
+    entity_type: str,
+    entity_id: str,
+    region: Optional[str] = None,
+    region_id: Optional[str] = None,
+    regionId: Optional[str] = None,
+    mode: str = DEFAULT_MODE,
+) -> Path:
+    """
+    Resolve the SQLite DB owning *entity_id* ('route', 'stop', 'trip', or 'agency'):
+    1. Explicit region / region_id / regionId override.
+    2. Pre-indexed & visited in-memory O(1) lookup across all DBs.
+    3. Fallback sequential DB scan (and persist newly discovered entity in visited index).
+    """
+    table, col, cache = _ENTITY_TABLE_MAP[entity_type]
+    target_region = regionId or region_id or region
+    if target_region and str(target_region).strip():
+        db_path, _ = _resolve_region_db(str(target_region).strip())
+        if entity_type == "trip":
+            _record_visited_entity(entity_type, entity_id, db_path)
+        else:
+            cache[entity_id] = db_path
+        return db_path
+
+    _ensure_multi_db_index_synced()
+
+    default_db = DB_PATHS.get(mode) or DB_PATH
+    cached_p = cache.get(entity_id)
+    if cached_p is not None and cached_p.is_file():
+        if mode == DEFAULT_MODE or (default_db and cached_p.resolve() == default_db.resolve()):
+            return cached_p
+
+    # If non-default mode requested, check mode's own DB first before cross-DB cache hit
+    if default_db and default_db.is_file():
+        try:
+            with _open_db(default_db) as conn:
+                row = conn.execute(
+                    f"SELECT 1 FROM {table} WHERE {col} = ? LIMIT 1", (entity_id,)
+                ).fetchone()
+                if row:
+                    _record_visited_entity(entity_type, entity_id, default_db)
+                    return default_db
+        except Exception:
+            pass
+
+    if cached_p is not None and cached_p.is_file():
+        return cached_p
+
+    # Fallback scan across remaining DBs (mainly for unvisited trip_ids)
+    for p in _list_available_sqlite_paths():
+        if default_db and p.resolve() == default_db.resolve():
+            continue
+        try:
+            with _open_db(p) as conn:
+                row = conn.execute(
+                    f"SELECT 1 FROM {table} WHERE {col} = ? LIMIT 1", (entity_id,)
+                ).fetchone()
+                if row:
+                    _record_visited_entity(entity_type, entity_id, p)
+                    return p
+        except Exception:
+            continue
+
+    return default_db
 
 
 def _find_db_for_route(
@@ -507,50 +965,8 @@ def _find_db_for_route(
     regionId: Optional[str] = None,
     mode: str = DEFAULT_MODE,
 ) -> Path:
-    """
-    Resolve the correct SQLite database file for a route:
-    1. If region / region_id / regionId is provided, resolve that specific DB.
-    2. Check route-to-database memory cache.
-    3. Check default DB (DB_PATHS[mode] or DB_PATH).
-    4. If not found in default DB, scan all discovered SQLite databases to find which contains route_id.
-    """
-    target_region = regionId or region_id or region
-    if target_region and str(target_region).strip():
-        db_path, _ = _resolve_region_db(str(target_region).strip())
-        _ROUTE_DB_CACHE[route_id] = db_path
-        return db_path
-
-    if route_id in _ROUTE_DB_CACHE:
-        cached_p = _ROUTE_DB_CACHE[route_id]
-        if cached_p.is_file():
-            return cached_p
-
-    # Check default DB first
-    default_db = DB_PATHS.get(mode) or DB_PATH
-    if default_db and default_db.is_file():
-        try:
-            with _open_db(default_db) as conn:
-                row = conn.execute("SELECT 1 FROM routes WHERE route_id = ? LIMIT 1", (route_id,)).fetchone()
-                if row:
-                    _ROUTE_DB_CACHE[route_id] = default_db
-                    return default_db
-        except Exception:
-            pass
-
-    # Scan all discovered SQLite databases dynamically
-    for p in _list_available_sqlite_paths():
-        if default_db and p.resolve() == default_db.resolve():
-            continue
-        try:
-            with _open_db(p) as conn:
-                row = conn.execute("SELECT 1 FROM routes WHERE route_id = ? LIMIT 1", (route_id,)).fetchone()
-                if row:
-                    _ROUTE_DB_CACHE[route_id] = p
-                    return p
-        except Exception:
-            continue
-
-    return default_db
+    """Resolve correct SQLite DB for a route using the multi-DB index and visited cache."""
+    return _find_db_for_entity("route", route_id, region=region, region_id=region_id, regionId=regionId, mode=mode)
 
 
 def _find_db_for_stop(
@@ -560,43 +976,8 @@ def _find_db_for_stop(
     regionId: Optional[str] = None,
     mode: str = DEFAULT_MODE,
 ) -> Path:
-    """Resolve correct SQLite DB for a stop, checking explicit region first, then default DB, then all DBs."""
-    target_region = regionId or region_id or region
-    if target_region and str(target_region).strip():
-        db_path, _ = _resolve_region_db(str(target_region).strip())
-        _STOP_DB_CACHE[stop_id] = db_path
-        return db_path
-
-    if stop_id in _STOP_DB_CACHE:
-        cached_p = _STOP_DB_CACHE[stop_id]
-        if cached_p.is_file():
-            return cached_p
-
-    default_db = DB_PATHS.get(mode) or DB_PATH
-    if default_db and default_db.is_file():
-        try:
-            with _open_db(default_db) as conn:
-                row = conn.execute("SELECT 1 FROM stops WHERE stop_id = ? LIMIT 1", (stop_id,)).fetchone()
-                if row:
-                    _STOP_DB_CACHE[stop_id] = default_db
-                    return default_db
-        except Exception:
-            pass
-
-    for p in _list_available_sqlite_paths():
-        if default_db and p.resolve() == default_db.resolve():
-            continue
-        try:
-            with _open_db(p) as conn:
-                row = conn.execute("SELECT 1 FROM stops WHERE stop_id = ? LIMIT 1", (stop_id,)).fetchone()
-                if row:
-                    _STOP_DB_CACHE[stop_id] = p
-                    return p
-        except Exception:
-            continue
-
-    return default_db
-
+    """Resolve correct SQLite DB for a stop using the multi-DB index and visited cache."""
+    return _find_db_for_entity("stop", stop_id, region=region, region_id=region_id, regionId=regionId, mode=mode)
 
 
 def _find_db_for_trip(
@@ -606,45 +987,8 @@ def _find_db_for_trip(
     regionId: Optional[str] = None,
     mode: str = DEFAULT_MODE,
 ) -> Path:
-    """Resolve correct SQLite DB for a trip, checking explicit region first, then cache, then default DB, then all DBs."""
-    target_region = regionId or region_id or region
-    if target_region and str(target_region).strip():
-        db_path, _ = _resolve_region_db(str(target_region).strip())
-        _TRIP_DB_CACHE[trip_id] = db_path
-        return db_path
-
-    if trip_id in _TRIP_DB_CACHE:
-        cached_p = _TRIP_DB_CACHE[trip_id]
-        if cached_p.is_file():
-            return cached_p
-
-    default_db = DB_PATHS.get(mode) or DB_PATH
-    if default_db and default_db.is_file():
-        try:
-            with _open_db(default_db) as conn:
-                row = conn.execute("SELECT 1 FROM trips WHERE trip_id = ? LIMIT 1", (trip_id,)).fetchone()
-                if row:
-                    _TRIP_DB_CACHE[trip_id] = default_db
-                    return default_db
-        except Exception:
-            pass
-
-    for p in _list_available_sqlite_paths():
-        if default_db and p.resolve() == default_db.resolve():
-            continue
-        try:
-            with _open_db(p) as conn:
-                row = conn.execute("SELECT 1 FROM trips WHERE trip_id = ? LIMIT 1", (trip_id,)).fetchone()
-                if row:
-                    _TRIP_DB_CACHE[trip_id] = p
-                    return p
-        except Exception:
-            continue
-
-    return default_db
-
-
-_AGENCY_DB_CACHE: dict = {}
+    """Resolve correct SQLite DB for a trip using the multi-DB index and persistent visited cache."""
+    return _find_db_for_entity("trip", trip_id, region=region, region_id=region_id, regionId=regionId, mode=mode)
 
 
 def _find_db_for_agency(
@@ -654,42 +998,8 @@ def _find_db_for_agency(
     regionId: Optional[str] = None,
     mode: str = DEFAULT_MODE,
 ) -> Path:
-    """Resolve correct SQLite DB for an agency, checking explicit region first, then cache, then default DB, then all DBs."""
-    target_region = regionId or region_id or region
-    if target_region and str(target_region).strip():
-        db_path, _ = _resolve_region_db(str(target_region).strip())
-        _AGENCY_DB_CACHE[agency_id] = db_path
-        return db_path
-
-    if agency_id in _AGENCY_DB_CACHE:
-        cached_p = _AGENCY_DB_CACHE[agency_id]
-        if cached_p.is_file():
-            return cached_p
-
-    default_db = DB_PATHS.get(mode) or DB_PATH
-    if default_db and default_db.is_file():
-        try:
-            with _open_db(default_db) as conn:
-                row = conn.execute("SELECT 1 FROM agency WHERE agency_id = ? LIMIT 1", (agency_id,)).fetchone()
-                if row:
-                    _AGENCY_DB_CACHE[agency_id] = default_db
-                    return default_db
-        except Exception:
-            pass
-
-    for p in _list_available_sqlite_paths():
-        if default_db and p.resolve() == default_db.resolve():
-            continue
-        try:
-            with _open_db(p) as conn:
-                row = conn.execute("SELECT 1 FROM agency WHERE agency_id = ? LIMIT 1", (agency_id,)).fetchone()
-                if row:
-                    _AGENCY_DB_CACHE[agency_id] = p
-                    return p
-        except Exception:
-            continue
-
-    return default_db
+    """Resolve correct SQLite DB for an agency using the multi-DB index and visited cache."""
+    return _find_db_for_entity("agency", agency_id, region=region, region_id=region_id, regionId=regionId, mode=mode)
 
 
 def _get_db_timezone(conn: sqlite3.Connection) -> ZoneInfo:
@@ -1192,17 +1502,20 @@ def _query_active_stops_for_candidates(
         route_filter_sql = ""
         route_params: list = list(all_platforms)
         if route_type is not None:
-            route_filter_sql = " AND CAST(r.route_type AS INTEGER) = ?"
+            route_filter_sql = " WHERE CAST(r.route_type AS INTEGER) = ?"
             route_params.append(route_type)
 
         ph_plat = ",".join("?" * len(all_platforms))
         routes_query = f"""
-            SELECT DISTINCT st.stop_id, r.route_id, r.route_short_name, r.route_long_name,
-                   r.route_type, r.route_color, t.trip_headsign
-            FROM stop_times st
-            JOIN trips t ON st.trip_id = t.trip_id
-            JOIN routes r ON t.route_id = r.route_id
-            WHERE st.stop_id IN ({ph_plat}){route_filter_sql}
+            SELECT sub.stop_id, r.route_id, r.route_short_name, r.route_long_name,
+                   r.route_type, r.route_color, sub.trip_headsign
+            FROM (
+                SELECT DISTINCT st.stop_id, t.route_id, t.trip_headsign
+                FROM stop_times st
+                JOIN trips t ON st.trip_id = t.trip_id
+                WHERE st.stop_id IN ({ph_plat})
+            ) sub
+            JOIN routes r ON sub.route_id = r.route_id{route_filter_sql}
         """
         stop_routes_map: dict[str, list] = {}
         for r in conn.execute(routes_query, route_params).fetchall():
@@ -1423,19 +1736,22 @@ def _query_active_routes_for_candidates(
         route_filter_sql = ""
         params: list = list(platform_ids)
         if route_type is not None:
-            route_filter_sql = " AND CAST(r.route_type AS INTEGER) = ?"
+            route_filter_sql = " WHERE CAST(r.route_type AS INTEGER) = ?"
             params.append(route_type)
 
         ph = ",".join("?" * len(platform_ids))
         query = f"""
-            SELECT DISTINCT st.stop_id, r.route_id, r.route_short_name, r.route_long_name,
+            SELECT sub.stop_id, r.route_id, r.route_short_name, r.route_long_name,
                    r.route_type, r.route_color, r.agency_id,
-                   a.agency_name, t.trip_headsign
-            FROM stop_times st
-            JOIN trips t ON st.trip_id = t.trip_id
-            JOIN routes r ON t.route_id = r.route_id
-            LEFT JOIN agency a ON r.agency_id = a.agency_id
-            WHERE st.stop_id IN ({ph}){route_filter_sql}
+                   a.agency_name, sub.trip_headsign
+            FROM (
+                SELECT DISTINCT st.stop_id, t.route_id, t.trip_headsign
+                FROM stop_times st
+                JOIN trips t ON st.trip_id = t.trip_id
+                WHERE st.stop_id IN ({ph})
+            ) sub
+            JOIN routes r ON sub.route_id = r.route_id
+            LEFT JOIN agency a ON r.agency_id = a.agency_id{route_filter_sql}
         """
         route_dict: dict[str, dict] = {}
         for row in conn.execute(query, params).fetchall():
@@ -1657,6 +1973,7 @@ def routes_search_hierarchy(
     route_type: Optional[int] = Query(default=None, description="Optional GTFS route_type filter"),
     region: Optional[str] = Query(default=None, description="Unique identifier (e.g. 'netherlands-gtfs') or name of the region/database"),
     region_id: Optional[str] = Query(default=None, description="Alias for region identifier"),
+    regionId: Optional[str] = Query(default=None, description="Alias for region identifier (camelCase)"),
     response: Response = None,
 ):
     """
@@ -1667,9 +1984,9 @@ def routes_search_hierarchy(
       3. State (60km / reverse-geocoded state boundary)
       4. Country (Nationwide database closest active routes)
     Returns distinct routes ordered by distance to user location.
-    If 'region' or 'region_id' is provided, only that specific database is queried.
+    If 'region', 'region_id', or 'regionId' is provided, only that specific database is queried.
     """
-    selected_region = region_id or region
+    selected_region = regionId or region_id or region
     res = _search_active_routes_hierarchy(
         lat=lat,
         lon=lon,
@@ -1693,6 +2010,7 @@ def stops_search_hierarchy(
     group_parent: bool = Query(default=True, description="Group platforms under parent_station"),
     region: Optional[str] = Query(default=None, description="Optional region / database override"),
     region_id: Optional[str] = Query(default=None, description="Alias for region identifier"),
+    regionId: Optional[str] = Query(default=None, description="Alias for region identifier (camelCase)"),
     type: str = Query(default="routes", description="What to display in hierarchy: 'routes' (default) or 'stops'"),
     response: Response = None,
 ):
@@ -1700,6 +2018,7 @@ def stops_search_hierarchy(
     Hierarchical active search starting with 500m radius, cascading to city -> state -> country.
     By default displays the routes present in the hierarchy; set type='stops' to view stops.
     """
+    selected_region = regionId or region_id or region
     if type == "stops":
         res = _search_active_stops_hierarchy(
             lat=lat,
@@ -1708,7 +2027,7 @@ def stops_search_hierarchy(
             limit=limit,
             route_type=route_type,
             group_parent=group_parent,
-            region=region_id or region,
+            region=selected_region,
         )
     else:
         res = _search_active_routes_hierarchy(
@@ -1717,7 +2036,7 @@ def stops_search_hierarchy(
             radius=radius,
             limit=limit,
             route_type=route_type,
-            region=region_id or region,
+            region=selected_region,
         )
     _apply_search_headers(response, res)
     return res
@@ -1732,6 +2051,8 @@ def stops_nearby(
     route_type: Optional[int] = Query(default=None, description="Optional GTFS route_type filter (0=tram, 1=subway, 2=rail, 3=bus, 4=ferry)"),
     group_parent: bool = Query(default=True, description="Group platforms under parent_station"),
     region: Optional[str] = Query(default=None, description="Optional region / database"),
+    region_id: Optional[str] = Query(default=None, description="Alias for region identifier"),
+    regionId: Optional[str] = Query(default=None, description="Alias for region identifier (camelCase)"),
     hierarchy: bool = Query(default=False, description="Return full hierarchical envelope with geo & level metadata"),
     fallback: bool = Query(default=True, description="If no active stops within 500m, cascade to city, state, country"),
     response: Response = None,
@@ -1751,11 +2072,16 @@ def stops_nearby(
         group_parent = True
     if hasattr(region, "default"):
         region = None
+    if hasattr(region_id, "default"):
+        region_id = None
+    if hasattr(regionId, "default"):
+        regionId = None
     if hasattr(hierarchy, "default"):
         hierarchy = False
     if hasattr(fallback, "default"):
         fallback = True
 
+    selected_region = regionId or region_id or region
     if fallback:
         res = _search_active_stops_hierarchy(
             lat=lat,
@@ -1764,11 +2090,11 @@ def stops_nearby(
             limit=limit,
             route_type=route_type,
             group_parent=group_parent,
-            region=region_id or region,
+            region=selected_region,
         )
     else:
         # Non-cascading single radius query
-        found = _find_db_for_coords(lat, lon, region=region)
+        found = _find_db_for_coords(lat, lon, region=selected_region)
         if not found:
             if response:
                 response.headers["X-Coverage"] = "false"
@@ -1807,6 +2133,7 @@ def routes_nearby(
     route_type: Optional[int] = Query(default=None, description="Optional GTFS route_type filter"),
     region: Optional[str] = Query(default=None, description="Unique identifier or name of the region/database"),
     region_id: Optional[str] = Query(default=None, description="Alias for region identifier"),
+    regionId: Optional[str] = Query(default=None, description="Alias for region identifier (camelCase)"),
     hierarchy: bool = Query(default=False, description="Return full hierarchical envelope with geo & level metadata"),
     fallback: bool = Query(default=True, description="If no active routes within radius, cascade to city, state, country"),
     response: Response = None,
@@ -1824,11 +2151,16 @@ def routes_nearby(
         route_type = None
     if hasattr(region, "default"):
         region = None
+    if hasattr(region_id, "default"):
+        region_id = None
+    if hasattr(regionId, "default"):
+        regionId = None
     if hasattr(hierarchy, "default"):
         hierarchy = False
     if hasattr(fallback, "default"):
         fallback = True
 
+    selected_region = regionId or region_id or region
     if fallback:
         res = _search_active_routes_hierarchy(
             lat=lat,
@@ -1836,10 +2168,10 @@ def routes_nearby(
             radius=radius,
             limit=limit,
             route_type=route_type,
-            region=region_id or region,
+            region=selected_region,
         )
     else:
-        found = _find_db_for_coords(lat, lon, region=region)
+        found = _find_db_for_coords(lat, lon, region=selected_region)
         if not found:
             if response:
                 response.headers["X-Coverage"] = "false"
@@ -2620,6 +2952,10 @@ def all_routes(
         default=None,
         description="Alias for region identifier.",
     ),
+    regionId: Optional[str] = Query(
+        default=None,
+        description="Alias for region identifier (camelCase).",
+    ),
 ):
     """
     Return paginated routes, optionally filtered by a search term.
@@ -2665,7 +3001,7 @@ def all_routes(
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
-    selected_region = region_id or region
+    selected_region = regionId or region_id or region
     with _db_or_region(region=selected_region, mode=mode) as conn:
         total = conn.execute(
             f"SELECT COUNT(*) FROM routes r {where_sql}", params
@@ -2782,7 +3118,7 @@ def all_routes(
         # its first and last stop are the same (e.g. the ferry PURPLE line).
         # Computed from the timetable, not from the headsign text.
         round_trip_map: dict = {}
-        if route_ids:
+        if include_between_stops and route_ids:
             # Prefer trips running today; a route with no service today (e.g.
             # a weekend-only line) falls back to all of its trips.
             between_map = _route_stops_between(conn, route_ids, active)
