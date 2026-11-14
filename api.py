@@ -291,6 +291,19 @@ def _db_or_region(region: Optional[str] = None, mode: str = DEFAULT_MODE):
 _REGION_CACHE: dict = {}
 _AGENCY_COUNTS_CACHE: dict = {}
 _GEOCODE_CACHE: dict = {}
+_GEOCODE_LOCK = threading.Lock()
+_GEOCODE_INFLIGHT: set = set()
+_GEOCODE_CLIENT = httpx.Client(
+    timeout=2.5,
+    headers={"User-Agent": "GTFSHierarchicalLocator/1.0"},
+    limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+)
+_ROUTES_RUNNING_CACHE: dict = {}
+_ROUTES_RUNNING_LOCK = threading.Lock()
+_ROUTES_NEARBY_CACHE: dict = {}
+_ROUTES_NEARBY_LOCK = threading.Lock()
+_SHAPES_CACHE: dict = {}
+_SHAPES_LOCK = threading.Lock()
 
 
 def _list_available_sqlite_paths() -> list[Path]:
@@ -376,9 +389,11 @@ _LIGHT_INDEX_SPECS = [
 _HEAVY_INDEX_SPECS = [
     ("idx_stop_times_stop_trip", "stop_times", ["stop_id", "trip_id"]),
     ("idx_stop_times_trip_stop", "stop_times", ["trip_id", "stop_id"]),
+    ("idx_stop_times_trip_seq_stop", "stop_times", ["trip_id", "stop_sequence", "stop_id"]),
     ("idx_trips_trip_route_hs", "trips", ["trip_id", "route_id", "trip_headsign"]),
     ("idx_trips_route_service_trip", "trips", ["route_id", "service_id", "trip_id"]),
     ("idx_trips_route_headsign", "trips", ["route_id", "trip_headsign"]),
+    ("idx_trips_route_shape_trip", "trips", ["route_id", "shape_id", "trip_id"]),
     ("idx_shapes_id_seq", "shapes", ["shape_id", "shape_pt_sequence"]),
 ]
 
@@ -425,9 +440,34 @@ def _open_multi_db_index() -> sqlite3.Connection:
         );
         CREATE INDEX IF NOT EXISTS idx_visited_entities_type_id
             ON visited_entities (entity_type, entity_id);
+        CREATE INDEX IF NOT EXISTS idx_visited_entities_last_visited
+            ON visited_entities (last_visited DESC);
+        CREATE INDEX IF NOT EXISTS idx_visited_entities_type_last
+            ON visited_entities (entity_type, last_visited DESC);
+        CREATE INDEX IF NOT EXISTS idx_visited_entities_db
+            ON visited_entities (db_path);
         """
     )
     return conn
+
+
+def _ensure_stop_routes_table(conn: sqlite3.Connection) -> None:
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='stop_routes'"
+    ).fetchone()
+    if exists:
+        return
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if "stop_times" not in tables or "trips" not in tables:
+        return
+    conn.executescript("""
+        CREATE TABLE stop_routes AS
+        SELECT DISTINCT st.stop_id AS stop_id, t.route_id AS route_id,
+               COALESCE(t.trip_headsign, '') AS headsign
+        FROM stop_times st JOIN trips t ON t.trip_id = st.trip_id;
+        CREATE INDEX idx_stop_routes_stop ON stop_routes(stop_id);
+    """)
+    conn.commit()
 
 
 def _ensure_sqlite_search_indexes(db_path: Path, size_bytes: int) -> None:
@@ -437,6 +477,7 @@ def _ensure_sqlite_search_indexes(db_path: Path, size_bytes: int) -> None:
         specs.extend(_HEAVY_INDEX_SPECS)
     try:
         conn = sqlite3.connect(db_path, check_same_thread=False)
+        _ensure_stop_routes_table(conn)
         existing = {
             r[0]
             for r in conn.execute(
@@ -1062,26 +1103,33 @@ def _find_db_for_coords(lat: float, lon: float, region: Optional[str] = None) ->
     return None
 
 
-def _reverse_geocode(lat: float, lon: float) -> dict:
+def _reverse_geocode(lat: float, lon: float, sync: bool = True) -> dict:
     """
     Reverse geocode (lat, lon) dynamically using OpenStreetMap Nominatim.
     Caches responses to avoid redundant lookups. Gracefully falls back if offline.
     """
     key = f"{round(lat, 3)}:{round(lon, 3)}"
-    if key in _GEOCODE_CACHE:
-        return _GEOCODE_CACHE[key]
+    with _GEOCODE_LOCK:
+        if key in _GEOCODE_CACHE:
+            return _GEOCODE_CACHE[key]
 
-    res = {
+    empty_res = {
         "city": None,
         "state": None,
         "country": None,
         "country_code": None,
         "display_name": None,
     }
-    try:
-        url = f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=jsonv2"
-        with httpx.Client(timeout=2.5, headers={"User-Agent": "GTFSHierarchicalLocator/1.0"}) as client:
-            resp = client.get(url)
+
+    def _fetch():
+        with _GEOCODE_LOCK:
+            if key in _GEOCODE_CACHE or key in _GEOCODE_INFLIGHT:
+                return
+            _GEOCODE_INFLIGHT.add(key)
+        try:
+            url = f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=jsonv2"
+            resp = _GEOCODE_CLIENT.get(url)
+            res = dict(empty_res)
             if resp.status_code == 200:
                 data = resp.json()
                 addr = data.get("address", {})
@@ -1097,11 +1145,22 @@ def _reverse_geocode(lat: float, lon: float) -> dict:
                 res["country"] = addr.get("country")
                 res["country_code"] = addr.get("country_code")
                 res["display_name"] = data.get("display_name")
-    except Exception:
-        pass
+            with _GEOCODE_LOCK:
+                _GEOCODE_CACHE[key] = res
+        except Exception:
+            with _GEOCODE_LOCK:
+                _GEOCODE_CACHE[key] = empty_res
+        finally:
+            with _GEOCODE_LOCK:
+                _GEOCODE_INFLIGHT.discard(key)
 
-    _GEOCODE_CACHE[key] = res
-    return res
+    if not sync:
+        threading.Thread(target=_fetch, daemon=True).start()
+        return empty_res
+
+    _fetch()
+    with _GEOCODE_LOCK:
+        return _GEOCODE_CACHE.get(key, empty_res)
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -1207,12 +1266,15 @@ class _SpatialGrid:
 
 
 _SPATIAL_GRIDS: dict[str, _SpatialGrid] = {}
+_SPATIAL_GRID_LOCK = threading.Lock()
 
 
 def _get_spatial_grid(db_path: Path) -> _SpatialGrid:
     key = str(db_path.resolve())
     if key not in _SPATIAL_GRIDS:
-        _SPATIAL_GRIDS[key] = _SpatialGrid(db_path)
+        with _SPATIAL_GRID_LOCK:
+            if key not in _SPATIAL_GRIDS:
+                _SPATIAL_GRIDS[key] = _SpatialGrid(db_path)
     return _SPATIAL_GRIDS[key]
 
 
@@ -1729,30 +1791,51 @@ def _query_active_routes_for_candidates(
     if not candidates:
         return []
 
+    candidates = candidates[:300]
+    if hasattr(route_type, "default"):
+        route_type = None
+
     stop_map = {s["stop_id"]: s for s in candidates}
     platform_ids = list(stop_map.keys())
 
     with _open_db(db_path) as conn:
+        has_stop_routes = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='stop_routes'"
+        ).fetchone() is not None
+
         route_filter_sql = ""
         params: list = list(platform_ids)
         if route_type is not None:
-            route_filter_sql = " WHERE CAST(r.route_type AS INTEGER) = ?"
             params.append(route_type)
 
         ph = ",".join("?" * len(platform_ids))
-        query = f"""
-            SELECT sub.stop_id, r.route_id, r.route_short_name, r.route_long_name,
-                   r.route_type, r.route_color, r.agency_id,
-                   a.agency_name, sub.trip_headsign
-            FROM (
-                SELECT DISTINCT st.stop_id, t.route_id, t.trip_headsign
-                FROM stop_times st
-                JOIN trips t ON st.trip_id = t.trip_id
-                WHERE st.stop_id IN ({ph})
-            ) sub
-            JOIN routes r ON sub.route_id = r.route_id
-            LEFT JOIN agency a ON r.agency_id = a.agency_id{route_filter_sql}
-        """
+        if has_stop_routes:
+            if route_type is not None:
+                route_filter_sql = " AND CAST(r.route_type AS INTEGER) = ?"
+            query = f"""
+                SELECT sr.stop_id, r.route_id, r.route_short_name, r.route_long_name,
+                       r.route_type, r.route_color, r.agency_id, a.agency_name, sr.headsign AS trip_headsign
+                FROM stop_routes sr
+                JOIN routes r ON r.route_id = sr.route_id
+                LEFT JOIN agency a ON a.agency_id = r.agency_id
+                WHERE sr.stop_id IN ({ph}){route_filter_sql}
+            """
+        else:
+            if route_type is not None:
+                route_filter_sql = " WHERE CAST(r.route_type AS INTEGER) = ?"
+            query = f"""
+                SELECT sub.stop_id, r.route_id, r.route_short_name, r.route_long_name,
+                       r.route_type, r.route_color, r.agency_id,
+                       a.agency_name, sub.trip_headsign
+                FROM (
+                    SELECT DISTINCT st.stop_id, t.route_id, t.trip_headsign
+                    FROM stop_times st
+                    JOIN trips t ON st.trip_id = t.trip_id
+                    WHERE st.stop_id IN ({ph})
+                ) sub
+                JOIN routes r ON sub.route_id = r.route_id
+                LEFT JOIN agency a ON r.agency_id = a.agency_id{route_filter_sql}
+            """
         route_dict: dict[str, dict] = {}
         for row in conn.execute(query, params).fetchall():
             rid = row["route_id"]
@@ -1832,14 +1915,13 @@ def _search_active_routes_hierarchy(
             "location": {"lat": lat, "lon": lon},
             "error": "No transit database found covering these coordinates.",
             "database": None,
-            "geo": _reverse_geocode(lat, lon),
+            "geo": _reverse_geocode(lat, lon, sync=False),
             "count": 0,
             "routes": [],
         }
 
     db_path, reg_info = found
     grid = _get_spatial_grid(db_path)
-    geo = _reverse_geocode(lat, lon)
     searched_levels = []
 
     # ── Level 1: 500m Radius ──────────────────────────────────────────────────
@@ -1850,6 +1932,7 @@ def _search_active_routes_hierarchy(
         db_path, cand_500m, limit=limit, route_type=route_type
     )
     if routes_500m:
+        geo = _reverse_geocode(lat, lon, sync=False)
         return {
             "success": True,
             "level": "radius_500m",
@@ -1861,6 +1944,9 @@ def _search_active_routes_hierarchy(
             "count": len(routes_500m),
             "routes": routes_500m,
         }
+
+    # Only fetch synchronously when cascading past Level 1:
+    geo = _reverse_geocode(lat, lon, sync=True)
 
     # ── Level 2: City (15 km) ────────────────────────────────────────────────
     searched_levels.append("city")
@@ -1936,12 +2022,12 @@ def _search_active_routes_hierarchy(
 
 
 def _safe_header_value(val: Any) -> str:
-    """Safely format string for HTTP header (RFC 7230 / latin-1). URL-quotes non-latin-1 characters."""
+    """Safely format string for HTTP header (ASCII / RFC 7230). URL-quotes non-ASCII characters."""
     if val is None:
         return ""
     s = str(val).strip()
     try:
-        s.encode("latin-1")
+        s.encode("ascii")
         return s
     except UnicodeEncodeError:
         import urllib.parse
@@ -1987,14 +2073,25 @@ def routes_search_hierarchy(
     If 'region', 'region_id', or 'regionId' is provided, only that specific database is queried.
     """
     selected_region = regionId or region_id or region
-    res = _search_active_routes_hierarchy(
-        lat=lat,
-        lon=lon,
-        radius=radius,
-        limit=limit,
-        route_type=route_type,
-        region=selected_region,
-    )
+    cache_key = (round(lat, 3), round(lon, 3), radius, limit, route_type, selected_region, True)
+    with _ROUTES_NEARBY_LOCK:
+        hit = _ROUTES_NEARBY_CACHE.get(cache_key)
+        if hit and _time.time() - hit[0] < 60:
+            res = hit[1]
+        else:
+            hit = None
+
+    if hit is None:
+        res = _search_active_routes_hierarchy(
+            lat=lat,
+            lon=lon,
+            radius=radius,
+            limit=limit,
+            route_type=route_type,
+            region=selected_region,
+        )
+        with _ROUTES_NEARBY_LOCK:
+            _ROUTES_NEARBY_CACHE[cache_key] = (_time.time(), res)
     _apply_search_headers(response, res)
     return res
 
@@ -2161,38 +2258,49 @@ def routes_nearby(
         fallback = True
 
     selected_region = regionId or region_id or region
-    if fallback:
-        res = _search_active_routes_hierarchy(
-            lat=lat,
-            lon=lon,
-            radius=radius,
-            limit=limit,
-            route_type=route_type,
-            region=selected_region,
-        )
-    else:
-        found = _find_db_for_coords(lat, lon, region=selected_region)
-        if not found:
-            if response:
-                response.headers["X-Coverage"] = "false"
-            return {"success": False, "level": "none", "routes": []} if hierarchy else []
-        db_path, _ = found
-        grid = _get_spatial_grid(db_path)
-        cand = grid.query(lat, lon, radius / 1000.0)
-        routes = _query_active_routes_for_candidates(
-            db_path, cand, limit=limit, route_type=route_type
-        )
-        res = {
-            "success": len(routes) > 0,
-            "level": "radius_500m" if routes else "none",
-            "searched_levels": ["radius_500m"],
-            "search_radius_meters": radius,
-            "location": {"lat": lat, "lon": lon},
-            "geo": _reverse_geocode(lat, lon),
-            "database": db_path.name,
-            "count": len(routes),
-            "routes": routes,
-        }
+    cache_key = (round(lat, 3), round(lon, 3), radius, limit, route_type, selected_region, fallback)
+    with _ROUTES_NEARBY_LOCK:
+        hit = _ROUTES_NEARBY_CACHE.get(cache_key)
+        if hit and _time.time() - hit[0] < 60:
+            res = hit[1]
+        else:
+            hit = None
+
+    if hit is None:
+        if fallback:
+            res = _search_active_routes_hierarchy(
+                lat=lat,
+                lon=lon,
+                radius=radius,
+                limit=limit,
+                route_type=route_type,
+                region=selected_region,
+            )
+        else:
+            found = _find_db_for_coords(lat, lon, region=selected_region)
+            if not found:
+                if response:
+                    response.headers["X-Coverage"] = "false"
+                return {"success": False, "level": "none", "routes": []} if hierarchy else []
+            db_path, _ = found
+            grid = _get_spatial_grid(db_path)
+            cand = grid.query(lat, lon, radius / 1000.0)
+            routes = _query_active_routes_for_candidates(
+                db_path, cand, limit=limit, route_type=route_type
+            )
+            res = {
+                "success": len(routes) > 0,
+                "level": "radius_500m" if routes else "none",
+                "searched_levels": ["radius_500m"],
+                "search_radius_meters": radius,
+                "location": {"lat": lat, "lon": lon},
+                "geo": _reverse_geocode(lat, lon, sync=False),
+                "database": db_path.name,
+                "count": len(routes),
+                "routes": routes,
+            }
+        with _ROUTES_NEARBY_LOCK:
+            _ROUTES_NEARBY_CACHE[cache_key] = (_time.time(), res)
 
     _apply_search_headers(response, res)
 
@@ -2470,15 +2578,7 @@ def agencies(
 ):
     """List every agency in the database for *mode*, with route/stop counts."""
     target_region = regionId or region_id or region
-    with _db_or_region(region=target_region, mode=mode) as conn:
-        rows = _agency_rows(conn)
-        result = [_agency_payload(conn, r) for r in rows]
-        agency_tr = _get_agency_translations(conn, lang) if lang else {}
-    if agency_tr:
-        for a in result:
-            name = agency_tr.get(a["agency_id"])
-            if name:
-                a["agency_name"] = name
+    result = region_agencies(target_region, include_counts=True, lang=lang or "en")
     return {"total": len(result), "mode": mode, "agencies": result}
 
 
@@ -2497,19 +2597,8 @@ def agency_detail(
     ),
 ):
     """Return a single agency by agency_id."""
-    db_path = _find_db_for_agency(agency_id, region=region, region_id=region_id, regionId=regionId, mode=mode)
-    with _open_db(db_path) as conn:
-        rows = _agency_rows(conn, agency_id)
-        if not rows:
-            raise HTTPException(
-                status_code=404,
-                detail=f"agency_id '{agency_id}' not found in mode '{mode}'",
-            )
-        detail = _agency_payload(conn, rows[0])
-        agency_tr = _get_agency_translations(conn, lang) if lang else {}
-    if agency_tr.get(agency_id):
-        detail["agency_name"] = agency_tr[agency_id]
-    return detail
+    target_region = regionId or region_id or region
+    return region_agencies(target_region, agency_id=agency_id, include_counts=True, lang=lang or "en")
 
 
 @app.get("/api/agencies/{agency_id}/routes")
@@ -2685,6 +2774,9 @@ def osm_stops(
 ):
     target_region = regionId or region_id or region
     with _db_or_region(region=target_region, mode=mode) as conn:
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        if "osm_stops" not in tables:
+            return []
         rows = conn.execute(
             "SELECT osm_node_id, name, name_en, lat, lon, tags FROM osm_stops"
         ).fetchall()
@@ -2714,6 +2806,9 @@ def mapping(
 ):
     target_region = regionId or region_id or region
     with _db_or_region(region=target_region, mode=mode) as conn:
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        if "stop_osm_mapping" not in tables:
+            return []
         rows = conn.execute(
             """
             SELECT m.stop_id, m.osm_node_id, m.distance_meters, m.match_status,
@@ -2745,14 +2840,15 @@ def stats(
 ):
     target_region = regionId or region_id or region
     with _db_or_region(region=target_region, mode=mode) as conn:
-        gtfs_count = conn.execute("SELECT COUNT(*) FROM stops").fetchone()[0]
-        osm_count  = conn.execute("SELECT COUNT(*) FROM osm_stops").fetchone()[0]
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        gtfs_count = conn.execute("SELECT COUNT(*) FROM stops").fetchone()[0] if "stops" in tables else 0
+        osm_count  = conn.execute("SELECT COUNT(*) FROM osm_stops").fetchone()[0] if "osm_stops" in tables else 0
         matched    = conn.execute(
             "SELECT COUNT(*) FROM stop_osm_mapping WHERE match_status='matched'"
-        ).fetchone()[0]
+        ).fetchone()[0] if "stop_osm_mapping" in tables else 0
         no_match   = conn.execute(
             "SELECT COUNT(*) FROM stop_osm_mapping WHERE match_status='no_match'"
-        ).fetchone()[0]
+        ).fetchone()[0] if "stop_osm_mapping" in tables else 0
     return {
         "gtfs_stops": gtfs_count,
         "osm_stops":  osm_count,
@@ -2847,14 +2943,17 @@ def _get_stop_translations(conn: sqlite3.Connection, lang: str) -> dict[str, str
     """
     if not lang or lang.lower() == "en":
         return {}
-    rows = conn.execute(
-        """
-        SELECT record_id, translation FROM translations
-        WHERE table_name = 'stops' AND field_name = 'stop_name' AND language = ?
-        """,
-        (lang.lower(),),
-    ).fetchall()
-    return {r["record_id"]: r["translation"] for r in rows}
+    try:
+        rows = conn.execute(
+            """
+            SELECT record_id, translation FROM translations
+            WHERE table_name = 'stops' AND field_name = 'stop_name' AND language = ?
+            """,
+            (lang.lower(),),
+        ).fetchall()
+        return {r["record_id"]: r["translation"] for r in rows}
+    except sqlite3.OperationalError:
+        return {}
 
 
 def _get_agency_translations(conn: sqlite3.Connection, lang: str) -> dict[str, str]:
@@ -2885,14 +2984,17 @@ def _get_trip_translations(conn: sqlite3.Connection, lang: str) -> dict[str, str
     """
     if not lang or lang.lower() == "en":
         return {}
-    rows = conn.execute(
-        """
-        SELECT record_id, translation FROM translations
-        WHERE table_name = 'trips' AND field_name = 'trip_headsign' AND language = ?
-        """,
-        (lang.lower(),),
-    ).fetchall()
-    return {r["record_id"]: r["translation"] for r in rows}
+    try:
+        rows = conn.execute(
+            """
+            SELECT record_id, translation FROM translations
+            WHERE table_name = 'trips' AND field_name = 'trip_headsign' AND language = ?
+            """,
+            (lang.lower(),),
+        ).fetchall()
+        return {r["record_id"]: r["translation"] for r in rows}
+    except sqlite3.OperationalError:
+        return {}
 
 
 def _translated_stop(stop_dict: dict, stop_tr: dict[str, str], lang: str) -> dict:
@@ -2956,6 +3058,18 @@ def all_routes(
         default=None,
         description="Alias for region identifier (camelCase).",
     ),
+    transit_mode: Optional[str] = Query(
+        default=None,
+        description="Filter routes by transit mode: 'metro'/'subway', 'tram', 'rail'/'train', 'bus', 'ferry', etc.",
+    ),
+    transitMode: Optional[str] = Query(
+        default=None,
+        description="Alias for transit_mode (camelCase).",
+    ),
+    route_type: Optional[int] = Query(
+        default=None,
+        description="Filter routes by GTFS route_type integer (e.g. 1 for metro/subway, 3 for bus, 2 for rail).",
+    ),
 ):
     """
     Return paginated routes, optionally filtered by a search term.
@@ -2982,6 +3096,34 @@ def all_routes(
     if agency_id and agency_id.strip():
         where_clauses.append("r.agency_id = ?")
         params.append(agency_id.strip())
+
+    selected_transit_mode = transit_mode or transitMode
+    if selected_transit_mode and selected_transit_mode.strip():
+        tm = selected_transit_mode.strip().lower()
+        if tm in ("metro", "subway"):
+            where_clauses.append("(CAST(r.route_type AS INTEGER) = 1 OR CAST(r.route_type AS INTEGER) BETWEEN 400 AND 405)")
+        elif tm in ("tram", "streetcar", "light_rail"):
+            where_clauses.append("(CAST(r.route_type AS INTEGER) = 0 OR CAST(r.route_type AS INTEGER) BETWEEN 900 AND 907)")
+        elif tm in ("rail", "train"):
+            where_clauses.append("(CAST(r.route_type AS INTEGER) = 2 OR CAST(r.route_type AS INTEGER) BETWEEN 100 AND 117)")
+        elif tm == "bus":
+            where_clauses.append("(CAST(r.route_type AS INTEGER) = 3 OR CAST(r.route_type AS INTEGER) BETWEEN 700 AND 717)")
+        elif tm == "ferry":
+            where_clauses.append("(CAST(r.route_type AS INTEGER) = 4 OR CAST(r.route_type AS INTEGER) BETWEEN 1000 AND 1002)")
+        elif tm in ("cable_car", "cablecar"):
+            where_clauses.append("CAST(r.route_type AS INTEGER) = 5")
+        elif tm == "gondola":
+            where_clauses.append("CAST(r.route_type AS INTEGER) = 6")
+        elif tm == "funicular":
+            where_clauses.append("CAST(r.route_type AS INTEGER) = 7")
+        elif tm == "trolleybus":
+            where_clauses.append("(CAST(r.route_type AS INTEGER) = 11 OR CAST(r.route_type AS INTEGER) BETWEEN 800 AND 802)")
+        elif tm == "monorail":
+            where_clauses.append("CAST(r.route_type AS INTEGER) = 12")
+
+    if route_type is not None:
+        where_clauses.append("CAST(r.route_type AS INTEGER) = ?")
+        params.append(int(route_type))
 
     if q and q.strip():
         term = f"%{q.strip()}%"
@@ -3048,46 +3190,67 @@ def all_routes(
 
             stop_tr = _get_stop_translations(conn, lang or "en")
 
-            # Per-route counts in one batched query:
+            # Per-route counts in batched queries (eliminates correlated subquery table scans):
             #   stop_count  – distinct stops served by the route
             #   trip_count  – trips in the feed
             #   trips_today – trips active today (calendar + calendar_dates)
             today = date.today()
             active = sorted(_active_services(conn, today))
-            stats_rows = conn.execute(
-                f"""
-                SELECT r.route_id,
-                       (SELECT COUNT(DISTINCT st.stop_id)
-                          FROM stop_times st
-                          JOIN trips t3 ON t3.trip_id = st.trip_id
-                         WHERE t3.route_id = r.route_id) AS stop_count,
-                       (SELECT COUNT(*)
-                          FROM trips t2
-                         WHERE t2.route_id = r.route_id) AS trip_count,
-                       -- first stop of the route's first trip (by sequence)
-                       (SELECT s.stop_name
-                          FROM stop_times st
-                          JOIN stops s ON s.stop_id = st.stop_id
-                         WHERE st.trip_id = (
-                               SELECT t4.trip_id FROM trips t4
-                                WHERE t4.route_id = r.route_id
-                                ORDER BY t4.trip_id LIMIT 1)
-                         ORDER BY CAST(st.stop_sequence AS INTEGER) LIMIT 1)
-                       AS start_stop_name,
-                       (SELECT s.stop_name
-                          FROM stop_times st
-                          JOIN stops s ON s.stop_id = st.stop_id
-                         WHERE st.trip_id = (
-                               SELECT t5.trip_id FROM trips t5
-                                WHERE t5.route_id = r.route_id
-                                ORDER BY t5.trip_id LIMIT 1)
-                         ORDER BY CAST(st.stop_sequence AS INTEGER) DESC LIMIT 1)
-                       AS end_stop_name
-                FROM routes r
-                WHERE r.route_id IN ({placeholders})
-                """,
-                route_ids,
-            ).fetchall()
+
+            # 1. Total trips per route (fast indexed GROUP BY)
+            trip_counts: dict[str, int] = dict(
+                conn.execute(
+                    f"SELECT route_id, COUNT(*) FROM trips WHERE route_id IN ({placeholders}) GROUP BY route_id",
+                    route_ids,
+                ).fetchall()
+            )
+
+            # 2. Distinct stops per route (batched GROUP BY across all trips of route)
+            stop_counts: dict[str, int] = dict(
+                conn.execute(
+                    f"""
+                    SELECT t.route_id, COUNT(DISTINCT st.stop_id)
+                    FROM trips t
+                    JOIN stop_times st ON st.trip_id = t.trip_id
+                    WHERE t.route_id IN ({placeholders})
+                    GROUP BY t.route_id
+                    """,
+                    route_ids,
+                ).fetchall()
+            )
+
+            # 3. Terminal stops (start_stop_name and end_stop_name from first trip of each route)
+            first_trips: dict[str, str] = dict(
+                conn.execute(
+                    f"SELECT route_id, MIN(trip_id) FROM trips WHERE route_id IN ({placeholders}) GROUP BY route_id",
+                    route_ids,
+                ).fetchall()
+            )
+            first_trip_ids = list(first_trips.values())
+            terminals: dict[str, list[Optional[str]]] = {}
+            if first_trip_ids:
+                ph_first = ",".join("?" for _ in first_trip_ids)
+                first_trip_stops = conn.execute(
+                    f"""
+                    SELECT t.route_id, st.trip_id, st.stop_id, s.stop_name, CAST(st.stop_sequence AS INTEGER) as seq
+                    FROM stop_times st
+                    JOIN trips t ON t.trip_id = st.trip_id
+                    JOIN stops s ON s.stop_id = st.stop_id
+                    WHERE st.trip_id IN ({ph_first})
+                    ORDER BY t.route_id, st.trip_id, seq
+                    """,
+                    first_trip_ids,
+                ).fetchall()
+                for r in first_trip_stops:
+                    rid = r["route_id"]
+                    sname = r["stop_name"]
+                    sid = r["stop_id"]
+                    if stop_tr:
+                        sname = stop_tr.get(sid, sname)
+                    if rid not in terminals:
+                        terminals[rid] = [sname, sname]
+                    else:
+                        terminals[rid][1] = sname
 
             today_counts: dict = {}
             if active:
@@ -3104,13 +3267,14 @@ def all_routes(
                 ).fetchall():
                     today_counts[row["route_id"]] = row["n"]
 
-            for row in stats_rows:
-                stats_map[row["route_id"]] = {
-                    "stop_count":      row["stop_count"],
-                    "trip_count":      row["trip_count"],
-                    "trips_today":     today_counts.get(row["route_id"], 0),
-                    "start_stop_name": row["start_stop_name"],
-                    "end_stop_name":   row["end_stop_name"],
+            for rid in route_ids:
+                term = terminals.get(rid, [None, None])
+                stats_map[rid] = {
+                    "stop_count":      stop_counts.get(rid, 0),
+                    "trip_count":      trip_counts.get(rid, 0),
+                    "trips_today":     today_counts.get(rid, 0),
+                    "start_stop_name": term[0],
+                    "end_stop_name":   term[1],
                 }
 
         between_map: dict = {}
@@ -3189,6 +3353,7 @@ def stop_routes(
     ),
 ):
     """All distinct routes that serve *stop_id*."""
+    lang = str(lang).strip() if (lang and not hasattr(lang, "default")) else None
     db_path = _find_db_for_stop(stop_id, region=region, region_id=region_id, regionId=regionId, mode=mode)
     with _open_db(db_path) as conn:
         # Verify stop exists
@@ -3281,6 +3446,12 @@ def osm_stop_routes(
     """All distinct routes that serve the GTFS stop mapped to *osm_node_id*."""
     target_region = regionId or region_id or region
     with _db_or_region(region=target_region, mode=mode) as conn:
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        if "stop_osm_mapping" not in tables:
+            raise HTTPException(
+                status_code=404,
+                detail=f"OSM stop mapping is not available for region '{target_region}'",
+            )
         # Look up the GTFS stop mapped to this OSM node
         mapping_row = conn.execute(
             """
@@ -3407,6 +3578,7 @@ def next_departures(
     Optional query param:
     - ``route`` – route_short_name exact match (case-insensitive)
     """
+    lang = str(lang).strip() if (lang and not hasattr(lang, "default")) else None
     db_path = _find_db_for_stop(stop_id, region=region, region_id=region_id, regionId=regionId, mode=mode)
     with _open_db(db_path) as conn:
         tz = _get_db_timezone(conn)
@@ -3475,9 +3647,10 @@ def next_departures(
 
         route_filter_sql = ""
         route_filter_params: list = []
-        if route and route.strip():
+        route_str = str(route).strip() if (route and not hasattr(route, "default")) else None
+        if route_str:
             route_filter_sql = "AND r.route_short_name = ? COLLATE NOCASE"
-            route_filter_params = [route.strip()]
+            route_filter_params = [route_str]
 
         if active:
             placeholders = ",".join("?" * len(active))
@@ -3730,28 +3903,43 @@ def _route_stops_between(
     *services* (optional) restricts the scan to trips active on a date, which
     keeps the query cheap on large bus feeds.
 
-    Trips are merged in trip_id order and rows are streamed one trip at a time,
-    so the whole stop_times slice is never held in memory.
+    Representative trips per route pattern (shape, headsign, direction) are selected
+    to avoid scanning millions of redundant trips across large transit networks.
 
     Returns ``{route_id: {"round_trip": bool, "stops": [...]}}``.
     """
     if not route_ids:
         return {}
     ph = ",".join("?" * len(route_ids))
-    sql = f"""
-        SELECT t.route_id, st.trip_id, s.stop_id, s.stop_name
-        FROM trips t
-        JOIN stop_times st ON st.trip_id = t.trip_id
-        JOIN stops      s  ON s.stop_id  = st.stop_id
-        WHERE t.route_id IN ({ph})
-    """
-    params: list = list(route_ids)
+    where_service = ""
+    params_rep: list = list(route_ids)
     if services is not None:
         if not services:
             return {}
-        sql += f" AND t.service_id IN ({','.join('?' * len(services))})"
-        params.extend(services)
-    sql += " ORDER BY t.route_id, st.trip_id, CAST(st.stop_sequence AS INTEGER)"
+        where_service = f" AND t.service_id IN ({','.join('?' * len(services))})"
+        params_rep.extend(services)
+
+    # Select representative trips per route pattern (one per unique shape/headsign/direction)
+    rep_sql = f"""
+        SELECT t.route_id, MIN(t.trip_id) AS trip_id
+        FROM trips t
+        WHERE t.route_id IN ({ph}) {where_service}
+        GROUP BY t.route_id, COALESCE(t.shape_id, t.trip_headsign, t.direction_id)
+    """
+    rep_rows = conn.execute(rep_sql, params_rep).fetchall()
+    if not rep_rows:
+        return {}
+
+    rep_trip_ids = [r["trip_id"] for r in rep_rows]
+    ph_trips = ",".join("?" * len(rep_trip_ids))
+    sql = f"""
+        SELECT t.route_id, st.trip_id, s.stop_id, s.stop_name
+        FROM stop_times st
+        JOIN trips t ON t.trip_id = st.trip_id
+        JOIN stops s ON s.stop_id = st.stop_id
+        WHERE st.trip_id IN ({ph_trips})
+        ORDER BY t.route_id, st.trip_id, CAST(st.stop_sequence AS INTEGER)
+    """
 
     between: dict = {}
     cur_route = cur_trip = None
@@ -3771,7 +3959,7 @@ def _route_stops_between(
                     {"stop_id": stop_id, "stop_name": stop_name}
                 )
 
-    for r in conn.execute(sql, params):
+    for r in conn.execute(sql, rep_trip_ids):
         if r["route_id"] != cur_route:
             flush_trip()
             cur_route = r["route_id"]
@@ -4775,12 +4963,23 @@ def _gtfs_stop_id_from_osm(conn: sqlite3.Connection, osm_node_id: int) -> str:
     Resolve an OSM node id to its matched GTFS stop_id via stop_osm_mapping.
     Raises HTTP 404 if the node is unknown or has no matched GTFS stop.
     """
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if "stop_osm_mapping" not in tables:
+        raise HTTPException(
+            status_code=404,
+            detail=f"OSM stop mapping is not available for this database",
+        )
     row = conn.execute(
         "SELECT stop_id FROM stop_osm_mapping "
         "WHERE osm_node_id = ? AND match_status = 'matched'",
         (osm_node_id,),
     ).fetchone()
     if row is None:
+        if "osm_stops" not in tables:
+            raise HTTPException(
+                status_code=404,
+                detail=f"OSM node {osm_node_id} not found in the database.",
+            )
         # Also check whether the node exists at all in osm_stops
         exists = conn.execute(
             "SELECT 1 FROM osm_stops WHERE osm_node_id = ?", (osm_node_id,)
@@ -4883,6 +5082,7 @@ def osm_stop_routes_direct(
     """
     All distinct routes that serve *stop_id* (GTFS stop_id passed directly).
     """
+    lang = str(lang).strip() if (lang and not hasattr(lang, "default")) else None
     db_path = _find_db_for_stop(stop_id, region=region, region_id=region_id, regionId=regionId, mode=mode)
     with _open_db(db_path) as conn:
         stop_row = conn.execute(
@@ -4946,6 +5146,7 @@ def osm_stop_next_departures(
         description="ISO datetime or time, e.g. '2026-04-12T14:30' or '14:30'. Defaults to now.",
     ),
     limit: int = Query(default=10, ge=1, le=100),
+    lang: Optional[str] = _LANG_QUERY,
     region: Optional[str] = Query(default=None, description="Optional region / database override"),
     region_id: Optional[str] = Query(default=None, description="Alias for region identifier"),
     regionId: Optional[str] = Query(default=None, description="Alias for region identifier (camelCase)"),
@@ -4965,7 +5166,288 @@ def osm_stop_next_departures(
         stop_id = _gtfs_stop_id_from_osm(conn, osm_node_id)
 
     # Reuse the existing endpoint logic by calling it directly
-    return next_departures(stop_id=stop_id, at=at, limit=limit, region=region, region_id=region_id, regionId=regionId, mode=mode)
+    return next_departures(
+        stop_id=stop_id,
+        at=at,
+        route=None,
+        limit=limit,
+        lang=lang,
+        region=region,
+        region_id=region_id,
+        regionId=regionId,
+        mode=mode,
+    )
+
+
+
+# GTFS route_type values for the modes this endpoint is meant for.
+#   0 tram, 1 subway, 2 rail, 4 ferry, 5 cable tram, 6 aerial lift,
+#   7 funicular, 11 trolleybus, 12 monorail
+RAIL_FERRY_ROUTE_TYPES = ("0", "1", "2", "4", "5", "6", "7", "11", "12")
+
+
+@app.get("/api/routes/running")
+def routes_running(
+    at: Optional[str] = Query(
+        default=None,
+        description=(
+            "Time to check. Use 'now' or omit for the current moment, or pass "
+            "'HH:MM', 'HH:MM:SS', 'YYYY-MM-DD', 'YYYY-MM-DDTHH:MM' or "
+            "'YYYY-MM-DDTHH:MM:SS'."
+        ),
+    ),
+    region: Optional[str] = Query(default=None, description="Optional region / database override"),
+    region_id: Optional[str] = Query(default=None, description="Alias for region identifier"),
+    regionId: Optional[str] = Query(default=None, description="Alias for region identifier (camelCase)"),
+    mode: str = Query(
+        default=DEFAULT_MODE,
+        description="Which service to query: 'transit' (bus), 'ferry' "
+                    "(water) or 'rail'. All are served by this one API; the "
+                    "endpoint paths are identical.",
+    ),
+    route_type: Optional[List[int]] = Query(
+        default=None,
+        description="Optional GTFS route_type filter (repeatable), e.g. "
+                    "route_type=2&route_type=4. Defaults to rail/ferry-like "
+                    "modes: " + ", ".join(RAIL_FERRY_ROUTE_TYPES) + ".",
+    ),
+    q: Optional[str] = Query(
+        default=None,
+        description="Optional search term matched against route_short_name / route_long_name (case-insensitive substring).",
+    ),
+    limit: int = Query(default=100, ge=1, le=500, description="Max routes to return"),
+    lang: Optional[str] = _LANG_QUERY,
+):
+    """
+    Return the rail/ferry routes that have at least one trip running at *at*.
+
+    A trip is considered running when its first departure is at or before *at*
+    and its last arrival is at or after *at* on the requested service date.
+    Trips whose GTFS times exceed 24:00:00 (past-midnight) are matched against
+    the previous service date as well.
+
+    Response includes, per route, the trip that is running and the stop it is
+    currently between/at.
+    """
+    on_date, from_secs = _parse_at(at)
+
+    types = [str(int(t)) for t in route_type] if route_type else list(RAIL_FERRY_ROUTE_TYPES)
+    type_placeholders = ",".join("?" * len(types))
+
+    target_region = regionId or region_id or region
+    cache_key = (str(target_region), str(on_date), from_secs, tuple(types), q, limit, lang)
+    now_ts = _time.time()
+    if cache_key in _ROUTES_RUNNING_CACHE:
+        cached_ts, cached_res = _ROUTES_RUNNING_CACHE[cache_key]
+        if now_ts - cached_ts < 30.0:
+            return cached_res
+
+    _ROUTES_RUNNING_LOCK.acquire()
+    try:
+        if cache_key in _ROUTES_RUNNING_CACHE:
+            cached_ts, cached_res = _ROUTES_RUNNING_CACHE[cache_key]
+            if now_ts - cached_ts < 30.0:
+                return cached_res
+        with _db_or_region(region=target_region, mode=mode) as conn:
+            # Services active on the requested date and on the previous date
+            # (the latter for trips whose times spill past 24:00:00).
+            active_today = _active_services(conn, on_date)
+            active_prev = _active_services(conn, on_date - timedelta(days=1))
+
+            service_offsets: dict[str, int] = {}
+            for sid in active_today:
+                service_offsets[sid] = 0
+            for sid in active_prev:
+                service_offsets.setdefault(sid, -86400)
+
+            if not service_offsets:
+                return {
+                    "date":        on_date.isoformat(),
+                    "from_time":   _secs_to_hhmm(from_secs),
+                    "route_types": [int(t) for t in types],
+                    "total":       0,
+                    "routes":      [],
+                    "note":        "No active services on this date",
+                }
+
+            service_ids = list(service_offsets)
+            svc_placeholders = ",".join("?" * len(service_ids))
+
+            route_where = [f"r.route_type IN ({type_placeholders})"]
+            route_params = [*types]
+            if q and q.strip():
+                term = f"%{q.strip()}%"
+                route_where.append(
+                    "(r.route_short_name LIKE ? COLLATE NOCASE "
+                    " OR r.route_long_name LIKE ? COLLATE NOCASE)"
+                )
+                route_params.extend([term, term])
+
+            routes = conn.execute(
+                f"""
+                SELECT route_id, route_short_name, route_long_name, route_color,
+                       route_text_color, route_type, route_url, agency_id
+                FROM routes r
+                WHERE {" AND ".join(route_where)}
+                """,
+                route_params,
+            ).fetchall()
+
+            running_trips: list[dict] = []
+            for r in routes:
+                rid = r["route_id"]
+                candidate_trips = conn.execute(
+                    f"""
+                    SELECT t.trip_id, t.trip_headsign, t.direction_id, t.service_id,
+                           MIN(CAST(st.stop_sequence AS INTEGER)) AS first_sequence,
+                           MAX(CAST(st.stop_sequence AS INTEGER)) AS last_sequence
+                    FROM trips t
+                    JOIN stop_times st ON st.trip_id = t.trip_id
+                    WHERE t.route_id = ? AND t.service_id IN ({svc_placeholders})
+                    GROUP BY t.trip_id
+                    """,
+                    [rid, *service_ids],
+                ).fetchall()
+                if not candidate_trips:
+                    continue
+
+                cand_map = {ct["trip_id"]: ct for ct in candidate_trips}
+                ph = ",".join("?" * len(cand_map))
+                st_rows = conn.execute(
+                    f"""
+                    SELECT st.trip_id,
+                           CAST(st.stop_sequence AS INTEGER) AS stop_sequence,
+                           st.stop_id,
+                           st.departure_time,
+                           st.arrival_time
+                    FROM stop_times st
+                    WHERE st.trip_id IN ({ph})
+                    """,
+                    list(cand_map.keys()),
+                ).fetchall()
+                first_last = {}
+                for st_row in st_rows:
+                    first_last.setdefault(st_row["trip_id"], {})[st_row["stop_sequence"]] = st_row
+
+                route_found = False
+                for ct in candidate_trips:
+                    seqs = first_last.get(ct["trip_id"], {})
+                    first = seqs.get(ct["first_sequence"])
+                    last = seqs.get(ct["last_sequence"])
+                    if first is None or last is None:
+                        continue
+                    try:
+                        start_secs = _gtfs_time_seconds(first["departure_time"] or first["arrival_time"])
+                        end_secs = _gtfs_time_seconds(last["arrival_time"] or last["departure_time"])
+                    except (ValueError, IndexError, TypeError):
+                        continue
+                    offset = service_offsets.get(ct["service_id"], 0)
+                    if start_secs + offset <= from_secs <= end_secs + offset:
+                        trip_dict = dict(r)
+                        trip_dict.update(dict(ct))
+                        running_trips.append({
+                            "trip": trip_dict,
+                            "first_stop_id": first["stop_id"],
+                            "last_stop_id": last["stop_id"],
+                            "start_secs": start_secs,
+                            "end_secs": end_secs,
+                            "offset": offset,
+                        })
+                        route_found = True
+                if route_found and len({rt["trip"]["route_id"] for rt in running_trips}) >= limit:
+                    break
+
+            if not running_trips:
+                return {
+                    "date":        on_date.isoformat(),
+                    "from_time":   _secs_to_hhmm(from_secs),
+                    "route_types": [int(t) for t in types],
+                    "total":       0,
+                    "routes":      [],
+                }
+
+            # Resolve stop names and translations in one pass.
+            stop_ids = {rt["first_stop_id"] for rt in running_trips} | {
+                rt["last_stop_id"] for rt in running_trips
+            }
+            stop_names: dict[str, str] = {}
+            if stop_ids:
+                ph = ",".join("?" * len(stop_ids))
+                for s in conn.execute(
+                    f"SELECT stop_id, stop_name FROM stops WHERE stop_id IN ({ph})",
+                    list(stop_ids),
+                ).fetchall():
+                    stop_names[s["stop_id"]] = s["stop_name"]
+
+            lang_key = (lang or "en").lower()
+            stop_tr = _get_stop_translations(conn, lang_key) if lang_key != "en" else {}
+            trip_tr = _get_trip_translations(conn, lang_key) if lang_key != "en" else {}
+
+        # Group running trips by route; keep the earliest-ending trip per route
+        # (the one most likely to be "the" train/ferry currently in service).
+        routes_map: dict[str, dict] = {}
+        for rt in running_trips:
+            trip = rt["trip"]
+            rid = trip["route_id"]
+            entry = routes_map.get(rid)
+            if entry is None:
+                start_name = stop_names.get(rt["first_stop_id"])
+                end_name = stop_names.get(rt["last_stop_id"])
+                long_name = trip["route_long_name"]
+                # Rail/ferry feeds often leave route_long_name empty.
+                if not (long_name or "").strip() and start_name and end_name:
+                    long_name = f"{start_name} → {end_name}"
+                entry = {
+                    "route_id":         rid,
+                    "route_short_name": trip["route_short_name"],
+                    "route_long_name":  long_name,
+                    "route_type":       trip["route_type"],
+                    "route_color":      trip["route_color"],
+                    "route_text_color": trip["route_text_color"],
+                    "route_url":        trip["route_url"],
+                    "agency_id":        trip["agency_id"],
+                    "start_stop_name":  start_name,
+                    "end_stop_name":    end_name,
+                    "running_trip_count": 0,
+                    "trips":            [],
+                }
+                if lang_key != "en":
+                    entry[f"start_stop_name_{lang_key}"] = stop_tr.get(rt["first_stop_id"], start_name)
+                    entry[f"end_stop_name_{lang_key}"] = stop_tr.get(rt["last_stop_id"], end_name)
+                routes_map[rid] = entry
+
+            entry["running_trip_count"] += 1
+            headsign = trip["trip_headsign"]
+            trip_entry = {
+                "trip_id":        trip["trip_id"],
+                "direction_id":   trip["direction_id"],
+                "trip_headsign":  headsign,
+                "departure_time": _secs_to_hhmmss(rt["start_secs"]),
+                "arrival_time":   _secs_to_hhmmss(rt["end_secs"]),
+            }
+            if lang_key != "en":
+                trip_entry[f"trip_headsign_{lang_key}"] = trip_tr.get(trip["trip_id"], headsign)
+            entry["trips"].append(trip_entry)
+
+        for entry in routes_map.values():
+            entry["trips"].sort(key=lambda x: x["departure_time"])
+
+        routes_list = sorted(
+            routes_map.values(),
+            key=lambda r: (r["route_short_name"] or "", r["route_id"]),
+        )[:limit]
+
+        res_payload = {
+            "date":        on_date.isoformat(),
+            "from_time":   _secs_to_hhmm(from_secs),
+            "route_types": [int(t) for t in types],
+            "total":       len(routes_map),
+            "routes":      routes_list,
+        }
+        _ROUTES_RUNNING_CACHE[cache_key] = (now_ts, res_payload)
+        return res_payload
+    finally:
+        _ROUTES_RUNNING_LOCK.release()
 
 
 
@@ -5563,19 +6045,13 @@ def _stop_events_rows(
         route_sql = "AND r.route_short_name = ? COLLATE NOCASE"
         params.append(route_filter)
 
-    terminal_sql = (
-        "AND st.stop_sequence > trip_bounds.first_seq"
-        if time_col == "arrival_time"
-        else "AND st.stop_sequence < trip_bounds.last_seq"
-    )
-
     rows = conn.execute(
         f"""
         SELECT st.stop_id          AS event_stop_id,
                st.{time_col}        AS event_time,
                st.arrival_time      AS arrival_time,
                st.departure_time    AS departure_time,
-               st.stop_sequence,
+               CAST(st.stop_sequence AS INTEGER) AS stop_sequence,
                st.stop_headsign,
                t.trip_id,
                t.trip_headsign,
@@ -5589,24 +6065,45 @@ def _stop_events_rows(
         FROM stop_times st
         JOIN trips  t ON t.trip_id  = st.trip_id
         JOIN routes r ON r.route_id = t.route_id
-        JOIN (
-            SELECT trip_id,
-                   MIN(CAST(stop_sequence AS INTEGER)) AS first_seq,
-                   MAX(CAST(stop_sequence AS INTEGER)) AS last_seq
-            FROM stop_times
-            GROUP BY trip_id
-        ) trip_bounds ON trip_bounds.trip_id = st.trip_id
         WHERE st.stop_id IN ({ph_stops})
           AND t.service_id IN ({ph})
-          {terminal_sql}
           {route_sql}
         ORDER BY st.{time_col}
         """,
         params,
     ).fetchall()
 
+    if not rows:
+        return []
+
+    trip_ids_for_bounds = list({r["trip_id"] for r in rows})
+    bounds_map: dict[str, tuple[int, int]] = {}
+    for i in range(0, len(trip_ids_for_bounds), 500):
+        chunk = trip_ids_for_bounds[i : i + 500]
+        ph_chunk = ",".join("?" * len(chunk))
+        for br in conn.execute(
+            f"""
+            SELECT trip_id,
+                   MIN(CAST(stop_sequence AS INTEGER)) AS first_seq,
+                   MAX(CAST(stop_sequence AS INTEGER)) AS last_seq
+            FROM stop_times
+            WHERE trip_id IN ({ph_chunk})
+            GROUP BY trip_id
+            """,
+            chunk,
+        ).fetchall():
+            bounds_map[br[0]] = (br[1], br[2])
+
     out = []
     for r in rows:
+        b = bounds_map.get(r["trip_id"])
+        if b:
+            first_seq, last_seq = b
+            seq = r["stop_sequence"]
+            if time_col == "arrival_time" and seq <= first_seq:
+                continue
+            if time_col != "arrival_time" and seq >= last_seq:
+                continue
         try:
             secs = _gtfs_time_seconds(r["event_time"])
         except (ValueError, IndexError):
@@ -5711,6 +6208,7 @@ def stop_events(
 
     time_col = "departure_time" if kind == "departures" else "arrival_time"
 
+    lang = str(lang).strip() if (lang and not hasattr(lang, "default")) else None
     db_path = _find_db_for_stop(stop_id, region=region, region_id=region_id, regionId=regionId, mode=mode)
     with _open_db(db_path) as conn:
         stop_row = conn.execute(
@@ -6018,6 +6516,7 @@ def stop_shapes(
 
 @app.get("/api/shapes")
 def all_shapes(
+    limit: Optional[int] = Query(default=None, description="Optional maximum number of shapes to return"),
     region: Optional[str] = Query(default=None, description="Optional region / database override"),
     region_id: Optional[str] = Query(default=None, description="Alias for region identifier"),
     regionId: Optional[str] = Query(default=None, description="Alias for region identifier (camelCase)"),
@@ -6061,6 +6560,9 @@ def all_shapes(
             ORDER BY r.route_short_name, t.direction_id
             """
         ).fetchall()
+
+        if limit is not None and limit > 0:
+            trip_rows = trip_rows[:limit]
 
         shape_ids = list({r["shape_id"] for r in trip_rows})
 
@@ -7591,258 +8093,6 @@ def routes_stops_count(
 
 # ── Routes running at a given time ───────────────────────────────────────────
 
-# GTFS route_type values for the modes this endpoint is meant for.
-#   0 tram, 1 subway, 2 rail, 4 ferry, 5 cable tram, 6 aerial lift,
-#   7 funicular, 11 trolleybus, 12 monorail
-RAIL_FERRY_ROUTE_TYPES = ("0", "1", "2", "4", "5", "6", "7", "11", "12")
 
-
-@app.get("/api/routes/running")
-def routes_running(
-    at: Optional[str] = Query(
-        default=None,
-        description=(
-            "Time to check. Use 'now' or omit for the current moment, or pass "
-            "'HH:MM', 'HH:MM:SS', 'YYYY-MM-DD', 'YYYY-MM-DDTHH:MM' or "
-            "'YYYY-MM-DDTHH:MM:SS'."
-        ),
-    ),
-    region: Optional[str] = Query(default=None, description="Optional region / database override"),
-    region_id: Optional[str] = Query(default=None, description="Alias for region identifier"),
-    regionId: Optional[str] = Query(default=None, description="Alias for region identifier (camelCase)"),
-    mode: str = Query(
-        default=DEFAULT_MODE,
-        description="Which service to query: 'transit' (bus), 'ferry' "
-                    "(water) or 'rail'. All are served by this one API; the "
-                    "endpoint paths are identical.",
-    ),
-    route_type: Optional[List[int]] = Query(
-        default=None,
-        description="Optional GTFS route_type filter (repeatable), e.g. "
-                    "route_type=2&route_type=4. Defaults to rail/ferry-like "
-                    "modes: " + ", ".join(RAIL_FERRY_ROUTE_TYPES) + ".",
-    ),
-    q: Optional[str] = Query(
-        default=None,
-        description="Optional search term matched against route_short_name / route_long_name (case-insensitive substring).",
-    ),
-    limit: int = Query(default=100, ge=1, le=500, description="Max routes to return"),
-    lang: Optional[str] = _LANG_QUERY,
-):
-    """
-    Return the rail/ferry routes that have at least one trip running at *at*.
-
-    A trip is considered running when its first departure is at or before *at*
-    and its last arrival is at or after *at* on the requested service date.
-    Trips whose GTFS times exceed 24:00:00 (past-midnight) are matched against
-    the previous service date as well.
-
-    Response includes, per route, the trip that is running and the stop it is
-    currently between/at.
-    """
-    on_date, from_secs = _parse_at(at)
-
-    types = [str(int(t)) for t in route_type] if route_type else list(RAIL_FERRY_ROUTE_TYPES)
-    type_placeholders = ",".join("?" * len(types))
-
-    target_region = regionId or region_id or region
-    with _db_or_region(region=target_region, mode=mode) as conn:
-        # Services active on the requested date and on the previous date
-        # (the latter for trips whose times spill past 24:00:00).
-        active_today = _active_services(conn, on_date)
-        active_prev = _active_services(conn, on_date - timedelta(days=1))
-
-        service_offsets: dict[str, int] = {}
-        for sid in active_today:
-            service_offsets[sid] = 0
-        for sid in active_prev:
-            service_offsets.setdefault(sid, -86400)
-
-        if not service_offsets:
-            return {
-                "date":        on_date.isoformat(),
-                "from_time":   _secs_to_hhmm(from_secs),
-                "route_types": [int(t) for t in types],
-                "total":       0,
-                "routes":      [],
-                "note":        "No active services on this date",
-            }
-
-        service_ids = list(service_offsets)
-        svc_placeholders = ",".join("?" * len(service_ids))
-
-        where_clauses = [
-            f"t.service_id IN ({svc_placeholders})",
-            f"r.route_type IN ({type_placeholders})",
-        ]
-        params: list = [*service_ids, *types]
-
-        if q and q.strip():
-            term = f"%{q.strip()}%"
-            where_clauses.append(
-                "(r.route_short_name LIKE ? COLLATE NOCASE "
-                " OR r.route_long_name LIKE ? COLLATE NOCASE)"
-            )
-            params.extend([term, term])
-
-        rows = conn.execute(
-            f"""
-            SELECT
-                r.route_id,
-                r.route_short_name,
-                r.route_long_name,
-                r.route_color,
-                r.route_text_color,
-                r.route_type,
-                r.route_url,
-                r.agency_id,
-                t.trip_id,
-                t.trip_headsign,
-                t.direction_id,
-                t.service_id,
-                MIN(CAST(st.stop_sequence AS INTEGER)) AS first_sequence,
-                MAX(CAST(st.stop_sequence AS INTEGER)) AS last_sequence
-            FROM  trips t
-            JOIN  routes r ON r.route_id = t.route_id
-            JOIN  stop_times st ON st.trip_id = t.trip_id
-            WHERE {" AND ".join(where_clauses)}
-            GROUP BY t.trip_id
-            """,
-            params,
-        ).fetchall()
-
-        # Keep trips whose [first departure, last arrival] window contains *at*.
-        running_trips: list[dict] = []
-        trip_ids: list[str] = []
-        for row in rows:
-            trip_ids.append(row["trip_id"])
-        first_last = {}
-        if trip_ids:
-            ph = ",".join("?" * len(trip_ids))
-            for st_row in conn.execute(
-                f"""
-                SELECT st.trip_id,
-                       CAST(st.stop_sequence AS INTEGER) AS stop_sequence,
-                       st.stop_id,
-                       st.departure_time,
-                       st.arrival_time
-                FROM stop_times st
-                WHERE st.trip_id IN ({ph})
-                """,
-                trip_ids,
-            ).fetchall():
-                first_last.setdefault(st_row["trip_id"], {})[
-                    st_row["stop_sequence"]
-                ] = st_row
-
-        for row in rows:
-            seqs = first_last.get(row["trip_id"], {})
-            first = seqs.get(row["first_sequence"])
-            last = seqs.get(row["last_sequence"])
-            if first is None or last is None:
-                continue
-            try:
-                start_secs = _gtfs_time_seconds(first["departure_time"] or first["arrival_time"])
-                end_secs = _gtfs_time_seconds(last["arrival_time"] or last["departure_time"])
-            except (ValueError, IndexError, TypeError):
-                continue
-            offset = service_offsets.get(row["service_id"], 0)
-            if start_secs + offset <= from_secs <= end_secs + offset:
-                running_trips.append({
-                    "trip": row,
-                    "first_stop_id": first["stop_id"],
-                    "last_stop_id": last["stop_id"],
-                    "start_secs": start_secs,
-                    "end_secs": end_secs,
-                    "offset": offset,
-                })
-
-        if not running_trips:
-            return {
-                "date":        on_date.isoformat(),
-                "from_time":   _secs_to_hhmm(from_secs),
-                "route_types": [int(t) for t in types],
-                "total":       0,
-                "routes":      [],
-            }
-
-        # Resolve stop names and translations in one pass.
-        stop_ids = {rt["first_stop_id"] for rt in running_trips} | {
-            rt["last_stop_id"] for rt in running_trips
-        }
-        stop_names: dict[str, str] = {}
-        if stop_ids:
-            ph = ",".join("?" * len(stop_ids))
-            for s in conn.execute(
-                f"SELECT stop_id, stop_name FROM stops WHERE stop_id IN ({ph})",
-                list(stop_ids),
-            ).fetchall():
-                stop_names[s["stop_id"]] = s["stop_name"]
-
-        lang_key = (lang or "en").lower()
-        stop_tr = _get_stop_translations(conn, lang_key) if lang_key != "en" else {}
-        trip_tr = _get_trip_translations(conn, lang_key) if lang_key != "en" else {}
-
-    # Group running trips by route; keep the earliest-ending trip per route
-    # (the one most likely to be "the" train/ferry currently in service).
-    routes_map: dict[str, dict] = {}
-    for rt in running_trips:
-        trip = rt["trip"]
-        rid = trip["route_id"]
-        entry = routes_map.get(rid)
-        if entry is None:
-            start_name = stop_names.get(rt["first_stop_id"])
-            end_name = stop_names.get(rt["last_stop_id"])
-            long_name = trip["route_long_name"]
-            # Rail/ferry feeds often leave route_long_name empty.
-            if not (long_name or "").strip() and start_name and end_name:
-                long_name = f"{start_name} → {end_name}"
-            entry = {
-                "route_id":         rid,
-                "route_short_name": trip["route_short_name"],
-                "route_long_name":  long_name,
-                "route_type":       trip["route_type"],
-                "route_color":      trip["route_color"],
-                "route_text_color": trip["route_text_color"],
-                "route_url":        trip["route_url"],
-                "agency_id":        trip["agency_id"],
-                "start_stop_name":  start_name,
-                "end_stop_name":    end_name,
-                "running_trip_count": 0,
-                "trips":            [],
-            }
-            if lang_key != "en":
-                entry[f"start_stop_name_{lang_key}"] = stop_tr.get(rt["first_stop_id"], start_name)
-                entry[f"end_stop_name_{lang_key}"] = stop_tr.get(rt["last_stop_id"], end_name)
-            routes_map[rid] = entry
-
-        entry["running_trip_count"] += 1
-        headsign = trip["trip_headsign"]
-        trip_entry = {
-            "trip_id":        trip["trip_id"],
-            "direction_id":   trip["direction_id"],
-            "trip_headsign":  headsign,
-            "departure_time": _secs_to_hhmmss(rt["start_secs"]),
-            "arrival_time":   _secs_to_hhmmss(rt["end_secs"]),
-        }
-        if lang_key != "en":
-            trip_entry[f"trip_headsign_{lang_key}"] = trip_tr.get(trip["trip_id"], headsign)
-        entry["trips"].append(trip_entry)
-
-    for entry in routes_map.values():
-        entry["trips"].sort(key=lambda x: x["departure_time"])
-
-    routes_list = sorted(
-        routes_map.values(),
-        key=lambda r: (r["route_short_name"] or "", r["route_id"]),
-    )[:limit]
-
-    return {
-        "date":        on_date.isoformat(),
-        "from_time":   _secs_to_hhmm(from_secs),
-        "route_types": [int(t) for t in types],
-        "total":       len(routes_map),
-        "routes":      routes_list,
-    }
 
 
