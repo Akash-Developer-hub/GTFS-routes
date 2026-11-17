@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import time
+from pathlib import Path
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -349,20 +350,61 @@ class MemoryCacheStore(CacheStore):
                         res.alerts.append(Alert(**item))
         return res
 
+    def _get_leader_file_path(self, lock_key: str) -> Path:
+        return Path(__file__).resolve().parent.parent / f".{lock_key}.lock"
+
+    def _read_file_leader(self, lock_key: str) -> Tuple[Optional[str], float]:
+        fpath = self._get_leader_file_path(lock_key)
+        if not fpath.is_file():
+            return None, 0.0
+        try:
+            raw = fpath.read_text(encoding="utf-8").strip()
+            parts = raw.split(":")
+            if len(parts) >= 2:
+                return parts[0], float(parts[1])
+        except Exception:
+            pass
+        return None, 0.0
+
+    def _write_file_leader(self, lock_key: str, worker_id: Optional[str], expiry: float) -> None:
+        fpath = self._get_leader_file_path(lock_key)
+        try:
+            if worker_id is None:
+                if fpath.exists():
+                    fpath.unlink(missing_ok=True)
+            else:
+                tmp = fpath.with_suffix(".tmp")
+                tmp.write_text(f"{worker_id}:{expiry}", encoding="utf-8")
+                tmp.replace(fpath)
+        except Exception:
+            pass
+
     async def acquire_leader_lock(self, lock_key: str, worker_id: str, ttl: int = 45) -> bool:
         now = time.time()
         async with self._lock:
+            # Check cross-process leader file first
+            f_leader, f_expiry = self._read_file_leader(lock_key)
+            if f_leader is not None and f_leader != worker_id and now < f_expiry:
+                return False
+
             if self._leader_id is None or self._leader_id == worker_id or now > self._lock_expiry:
                 self._leader_id = worker_id
                 self._lock_expiry = now + ttl
+                self._write_file_leader(lock_key, worker_id, self._lock_expiry)
                 return True
             return False
 
     async def renew_leader_lock(self, lock_key: str, worker_id: str, ttl: int = 45) -> bool:
         now = time.time()
         async with self._lock:
-            if self._leader_id == worker_id:
+            f_leader, f_expiry = self._read_file_leader(lock_key)
+            if f_leader is not None and f_leader != worker_id and now < f_expiry:
+                return False
+
+            if self._leader_id == worker_id or (f_leader == worker_id):
+                self._leader_id = worker_id
                 self._lock_expiry = now + ttl
+                self._write_file_leader(lock_key, worker_id, self._lock_expiry)
                 return True
             return False
 
@@ -371,6 +413,7 @@ class MemoryCacheStore(CacheStore):
             if self._leader_id == worker_id:
                 self._leader_id = None
                 self._lock_expiry = 0.0
+                self._write_file_leader(lock_key, None, 0.0)
 
     async def close(self) -> None:
         pass

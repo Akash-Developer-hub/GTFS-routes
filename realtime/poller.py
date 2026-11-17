@@ -578,10 +578,14 @@ _SYNC_HTTP_CLIENT: Optional[httpx.Client] = None
 def _get_sync_http_client(timeout: float = 15.0) -> httpx.Client:
     global _SYNC_HTTP_CLIENT
     if _SYNC_HTTP_CLIENT is None:
-        client_name = os.environ.get("ENTUR_CLIENT_NAME", os.environ.get("REALTIME_CLIENT_NAME", "zeus-gtfsroutes")).strip()
+        user_agent = os.environ.get(
+            "REALTIME_USER_AGENT",
+            "GTFS-LiveTransit/2.0 (+https://github.com/gtfsroutes; contact@ovapi.nl)"
+        ).strip()
         headers = {
-            "User-Agent": "GTFSRealtimeClient/1.0 (+https://github.com)",
-            "ET-Client-Name": client_name,
+            "User-Agent": user_agent,
+            "Accept": "application/x-protobuf, application/octet-stream;q=0.9, */*;q=0.8",
+            "Accept-Encoding": "gzip, deflate",
         }
         _SYNC_HTTP_CLIENT = httpx.Client(
             timeout=httpx.Timeout(timeout, connect=10.0),
@@ -593,7 +597,13 @@ def _get_sync_http_client(timeout: float = 15.0) -> httpx.Client:
 def _download_and_parse_worker(url: str, headers: dict, feed_name: str, timeout: float = 15.0):
     """Run full HTTP download and protobuf parsing completely off the event loop in a worker thread."""
     client = _get_sync_http_client(timeout)
-    resp = client.get(url, headers=headers)
+    req_headers = dict(headers or {})
+    # Only send ET-Client-Name to Entur feeds where it is an API requirement
+    if "entur.io" in url and "ET-Client-Name" not in req_headers:
+        client_name = os.environ.get("ENTUR_CLIENT_NAME", os.environ.get("REALTIME_CLIENT_NAME", "zeus-gtfsroutes")).strip()
+        req_headers["ET-Client-Name"] = client_name
+
+    resp = client.get(url, headers=req_headers)
     status_code = resp.status_code
     resp_headers = dict(resp.headers)
     if status_code == 304:
@@ -626,9 +636,14 @@ class RealtimePoller:
     async def start(self) -> None:
         self._running = True
         client_name = os.environ.get("ENTUR_CLIENT_NAME", os.environ.get("REALTIME_CLIENT_NAME", "zeus-gtfsroutes")).strip()
+        user_agent = os.environ.get(
+            "REALTIME_USER_AGENT",
+            "GTFS-LiveTransit/2.0 (+https://github.com/gtfsroutes; contact@ovapi.nl)"
+        ).strip()
         headers = {
-            "User-Agent": "GTFSRealtimeClient/1.0 (+https://github.com)",
-            "ET-Client-Name": client_name,
+            "User-Agent": user_agent,
+            "Accept": "application/x-protobuf, application/octet-stream;q=0.9, */*;q=0.8",
+            "Accept-Encoding": "gzip, deflate",
         }
         self._client = httpx.AsyncClient(
             timeout=self.timeout,
@@ -734,25 +749,34 @@ class RealtimePoller:
                         return
 
                     if status_code == 429:
-                        # Rate limited by upstream server (e.g. gtfs.ovapi.nl): do NOT retry immediately!
-                        retry_after = 60
+                        # Rate limited by upstream server: apply exponential backoff
+                        consecutive = getattr(cfg, "_consecutive_429", 0) + 1
+                        cfg._consecutive_429 = consecutive
+                        base_backoff = 60
                         if "Retry-After" in resp_headers:
                             try:
-                                retry_after = max(30, int(resp_headers["Retry-After"]))
+                                base_backoff = max(30, int(resp_headers["Retry-After"]))
                             except ValueError:
                                 pass
+                        # Escalating backoff: 60s -> 180s (3m) -> 360s (6m) -> 600s (10m)
+                        multiplier = 1 if consecutive == 1 else (3 if consecutive == 2 else (6 if consecutive == 3 else 10))
+                        retry_after = base_backoff * multiplier
                         log.warning(
-                            "Feed %s rate-limited (HTTP 429) by upstream server. Retaining cached data and backing off for %ds.",
+                            "Feed %s rate-limited (HTTP 429) by upstream server [incident #%d]. Retaining cached data and backing off for %ds.",
                             cfg.name,
+                            consecutive,
                             retry_after,
                         )
                         meta.http_status = 429
-                        meta.last_error = f"429 Too Many Requests (upstream rate-limit, backing off {retry_after}s)"
+                        meta.last_error = f"429 Too Many Requests (upstream rate-limit #{consecutive}, backing off {retry_after}s)"
                         meta.error_count += 1
                         meta.health_state = HealthState.DEGRADED
                         await self.cache.update_snapshot(cfg.name, [], meta, is_differential=True)
                         cfg.interval_override = retry_after
                         return
+
+                    # On successful fetch (200 or 304), reset the consecutive 429 incident counter
+                    cfg._consecutive_429 = 0
 
                     # Store headers
                     if "ETag" in resp_headers:
