@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import time
 import uuid
 from datetime import datetime, timezone
@@ -293,18 +294,86 @@ def get_feed_configs(feeds_file: Optional[Path] = None) -> List[FeedConfig]:
 FEED_CONFIGS = get_feed_configs()
 
 
+_SCHEDULE_RELATIONSHIP_MAP = {
+    0: "SCHEDULED",
+    1: "SKIPPED",
+    2: "NO_DATA",
+    3: "UNSCHEDULED",
+}
+
+_VEHICLE_STOP_STATUS_MAP = {
+    0: "INCOMING_AT",
+    1: "STOPPED_AT",
+    2: "IN_TRANSIT_TO",
+}
+
+_CONGESTION_LEVEL_MAP = {
+    0: "UNKNOWN_CONGESTION_LEVEL",
+    1: "RUNNING_SMOOTHLY",
+    2: "STOP_AND_GO",
+    3: "CONGESTION",
+    4: "SEVERE_CONGESTION",
+}
+
+_OCCUPANCY_STATUS_MAP = {
+    0: "EMPTY",
+    1: "MANY_SEATS_AVAILABLE",
+    2: "FEW_SEATS_AVAILABLE",
+    3: "STANDING_ROOM_ONLY",
+    4: "CRUSHED_STANDING_ROOM_ONLY",
+    5: "FULL",
+    6: "NOT_ACCEPTING_PASSENGERS",
+}
+
+_ALERT_CAUSE_MAP = {
+    1: "UNKNOWN_CAUSE",
+    2: "OTHER_CAUSE",
+    3: "TECHNICAL_PROBLEM",
+    4: "STRIKE",
+    5: "DEMONSTRATION",
+    6: "ACCIDENT",
+    7: "HOLIDAY",
+    8: "WEATHER",
+    9: "MAINTENANCE",
+    10: "CONSTRUCTION",
+    11: "POLICE_ACTIVITY",
+    12: "MEDICAL_EMERGENCY",
+}
+
+_ALERT_EFFECT_MAP = {
+    1: "NO_SERVICE",
+    2: "REDUCED_SERVICE",
+    3: "SIGNIFICANT_DELAYS",
+    4: "DETOUR",
+    5: "ADDITIONAL_SERVICE",
+    6: "MODIFIED_SERVICE",
+    7: "OTHER_EFFECT",
+    8: "UNKNOWN_EFFECT",
+    9: "STOP_MOVED",
+}
+
+_ALERT_SEVERITY_MAP = {
+    1: "UNKNOWN_SEVERITY",
+    2: "INFO",
+    3: "WARNING",
+    4: "SEVERE",
+}
+
+
 def _parse_trip_update(entity, feed_source: str) -> Dict[str, Any]:
     tu = entity.trip_update
-    trip = tu.trip
+    has_trip = tu.HasField("trip")
+    trip = tu.trip if has_trip else None
+
     trip_desc = {
-        "trip_id": trip.trip_id if trip.HasField("trip_id") else "",
-        "route_id": trip.route_id if trip.HasField("route_id") else None,
-        "direction_id": trip.direction_id if trip.HasField("direction_id") else None,
-        "start_time": trip.start_time if trip.HasField("start_time") else None,
-        "start_date": trip.start_date if trip.HasField("start_date") else None,
+        "trip_id": trip.trip_id if (trip and trip.HasField("trip_id")) else "",
+        "route_id": trip.route_id if (trip and trip.HasField("route_id")) else None,
+        "direction_id": trip.direction_id if (trip and trip.HasField("direction_id")) else None,
+        "start_time": trip.start_time if (trip and trip.HasField("start_time")) else None,
+        "start_date": trip.start_date if (trip and trip.HasField("start_date")) else None,
         "schedule_relationship": (
-            gtfs_realtime_pb2.TripDescriptor.ScheduleRelationship.Name(trip.schedule_relationship)
-            if trip.HasField("schedule_relationship")
+            _SCHEDULE_RELATIONSHIP_MAP.get(trip.schedule_relationship, "SCHEDULED")
+            if (trip and trip.HasField("schedule_relationship"))
             else "SCHEDULED"
         ),
     }
@@ -322,17 +391,19 @@ def _parse_trip_update(entity, feed_source: str) -> Dict[str, Any]:
     for stu in tu.stop_time_update:
         arr = None
         if stu.HasField("arrival"):
+            a = stu.arrival
             arr = {
-                "delay": stu.arrival.delay if stu.arrival.HasField("delay") else None,
-                "time": stu.arrival.time if stu.arrival.HasField("time") else None,
-                "uncertainty": stu.arrival.uncertainty if stu.arrival.HasField("uncertainty") else None,
+                "delay": a.delay if a.HasField("delay") else None,
+                "time": a.time if a.HasField("time") else None,
+                "uncertainty": a.uncertainty if a.HasField("uncertainty") else None,
             }
         dep = None
         if stu.HasField("departure"):
+            d = stu.departure
             dep = {
-                "delay": stu.departure.delay if stu.departure.HasField("delay") else None,
-                "time": stu.departure.time if stu.departure.HasField("time") else None,
-                "uncertainty": stu.departure.uncertainty if stu.departure.HasField("uncertainty") else None,
+                "delay": d.delay if d.HasField("delay") else None,
+                "time": d.time if d.HasField("time") else None,
+                "uncertainty": d.uncertainty if d.HasField("uncertainty") else None,
             }
 
         stop_time_updates.append({
@@ -340,11 +411,7 @@ def _parse_trip_update(entity, feed_source: str) -> Dict[str, Any]:
             "stop_id": stu.stop_id if stu.HasField("stop_id") else None,
             "arrival": arr,
             "departure": dep,
-            "schedule_relationship": (
-                gtfs_realtime_pb2.TripUpdate.StopTimeUpdate.ScheduleRelationship.Name(stu.schedule_relationship)
-                if stu.HasField("schedule_relationship")
-                else "SCHEDULED"
-            ),
+            "schedule_relationship": _SCHEDULE_RELATIONSHIP_MAP.get(stu.schedule_relationship, "SCHEDULED"),
         })
 
     return {
@@ -388,22 +455,22 @@ def _parse_vehicle_position(entity, feed_source: str) -> Dict[str, Any]:
             "odometer": pos.odometer if (pos and pos.HasField("odometer")) else None,
             "speed": pos.speed if (pos and pos.HasField("speed")) else None,
         },
-        "current_stop_sequence": vp.current_stop_sequence if vp.HasField("current_stop_sequence") else None,
-        "stop_id": vp.stop_id if vp.HasField("stop_id") else None,
+        "current_stop_sequence": vp.current_stop_sequence if (vp and vp.HasField("current_stop_sequence")) else None,
+        "stop_id": vp.stop_id if (vp and vp.HasField("stop_id")) else None,
         "current_status": (
-            gtfs_realtime_pb2.VehiclePosition.VehicleStopStatus.Name(vp.current_status)
-            if vp.HasField("current_status")
+            _VEHICLE_STOP_STATUS_MAP.get(vp.current_status, "IN_TRANSIT_TO")
+            if (vp and vp.HasField("current_status"))
             else None
         ),
-        "timestamp": vp.timestamp if vp.HasField("timestamp") else None,
+        "timestamp": vp.timestamp if (vp and vp.HasField("timestamp")) else None,
         "congestion_level": (
-            gtfs_realtime_pb2.VehiclePosition.CongestionLevel.Name(vp.congestion_level)
-            if vp.HasField("congestion_level")
+            _CONGESTION_LEVEL_MAP.get(vp.congestion_level, "UNKNOWN_CONGESTION_LEVEL")
+            if (vp and vp.HasField("congestion_level"))
             else None
         ),
         "occupancy_status": (
-            gtfs_realtime_pb2.VehiclePosition.OccupancyStatus.Name(vp.occupancy_status)
-            if vp.HasField("occupancy_status")
+            _OCCUPANCY_STATUS_MAP.get(vp.occupancy_status, "EMPTY")
+            if (vp and vp.HasField("occupancy_status"))
             else None
         ),
         "feed_source": feed_source,
@@ -447,12 +514,12 @@ def _parse_alert(entity, feed_source: str) -> Dict[str, Any]:
         "active_periods": active_periods,
         "informed_entities": informed_entities,
         "cause": (
-            gtfs_realtime_pb2.Alert.Cause.Name(al.cause)
+            _ALERT_CAUSE_MAP.get(al.cause, "UNKNOWN_CAUSE")
             if al.HasField("cause")
             else "UNKNOWN_CAUSE"
         ),
         "effect": (
-            gtfs_realtime_pb2.Alert.Effect.Name(al.effect)
+            _ALERT_EFFECT_MAP.get(al.effect, "UNKNOWN_EFFECT")
             if al.HasField("effect")
             else "UNKNOWN_EFFECT"
         ),
@@ -460,7 +527,7 @@ def _parse_alert(entity, feed_source: str) -> Dict[str, Any]:
         "header_text": header,
         "description_text": desc,
         "severity_level": (
-            gtfs_realtime_pb2.Alert.SeverityLevel.Name(al.severity_level)
+            _ALERT_SEVERITY_MAP.get(al.severity_level, "UNKNOWN_SEVERITY")
             if al.HasField("severity_level")
             else "UNKNOWN_SEVERITY"
         ),
@@ -468,8 +535,16 @@ def _parse_alert(entity, feed_source: str) -> Dict[str, Any]:
     }
 
 
+if sys.platform == "win32":
+    try:
+        import ctypes
+        ctypes.windll.winmm.timeBeginPeriod(1)
+    except Exception:
+        pass
+
+
 def parse_feed_message(content: bytes, feed_name: str) -> Tuple[List[Dict[str, Any]], str]:
-    """Parse GTFS-RT FeedMessage protobuf into normalized dictionaries."""
+    """Parse GTFS-RT FeedMessage protobuf into normalized dictionaries with cooperative GIL yielding."""
     msg = gtfs_realtime_pb2.FeedMessage()
     msg.ParseFromString(content)
 
@@ -478,7 +553,13 @@ def parse_feed_message(content: bytes, feed_name: str) -> Tuple[List[Dict[str, A
         inc = gtfs_realtime_pb2.FeedHeader.Incrementality.Name(msg.header.incrementality)
 
     entities = []
+    entity_count = 0
     for entity in msg.entity:
+        entity_count += 1
+        # Frequent cooperative GIL yield (2ms every 100 entities) keeps HTTP response times sub-50ms
+        if entity_count % 100 == 0:
+            time.sleep(0.002)
+
         if getattr(entity, "is_deleted", False):
             entities.append({"entity_id": entity.id, "is_deleted": True})
             continue
@@ -492,6 +573,39 @@ def parse_feed_message(content: bytes, feed_name: str) -> Tuple[List[Dict[str, A
     return entities, inc
 
 
+_SYNC_HTTP_CLIENT: Optional[httpx.Client] = None
+
+def _get_sync_http_client(timeout: float = 15.0) -> httpx.Client:
+    global _SYNC_HTTP_CLIENT
+    if _SYNC_HTTP_CLIENT is None:
+        client_name = os.environ.get("ENTUR_CLIENT_NAME", os.environ.get("REALTIME_CLIENT_NAME", "zeus-gtfsroutes")).strip()
+        headers = {
+            "User-Agent": "GTFSRealtimeClient/1.0 (+https://github.com)",
+            "ET-Client-Name": client_name,
+        }
+        _SYNC_HTTP_CLIENT = httpx.Client(
+            timeout=httpx.Timeout(timeout, connect=10.0),
+            follow_redirects=True,
+            headers=headers,
+        )
+    return _SYNC_HTTP_CLIENT
+
+def _download_and_parse_worker(url: str, headers: dict, feed_name: str, timeout: float = 15.0):
+    """Run full HTTP download and protobuf parsing completely off the event loop in a worker thread."""
+    client = _get_sync_http_client(timeout)
+    resp = client.get(url, headers=headers)
+    status_code = resp.status_code
+    resp_headers = dict(resp.headers)
+    if status_code == 304:
+        return 304, resp_headers, [], "DIFFERENTIAL"
+    resp.raise_for_status()
+    content = resp.content
+    if not content or len(content) < 4:
+        raise ValueError(f"Received empty or truncated payload ({len(content)} bytes)")
+    entities, inc = parse_feed_message(content, feed_name)
+    return status_code, resp_headers, entities, inc
+
+
 class RealtimePoller:
     """Manages background fetching, validation, and multi-worker leader election."""
 
@@ -501,7 +615,7 @@ class RealtimePoller:
         self.timeout = float(os.environ.get("REALTIME_HTTP_TIMEOUT_SECONDS", "15"))
         self.max_retries = int(os.environ.get("REALTIME_HTTP_MAX_RETRIES", "2"))
         self.lock_ttl = int(os.environ.get("REALTIME_LOCK_TTL_SECONDS", "45"))
-        max_concurrent = int(os.environ.get("REALTIME_MAX_CONCURRENT_FETCHES", "30"))
+        max_concurrent = int(os.environ.get("REALTIME_MAX_CONCURRENT_FETCHES", "1"))
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._running = False
         self._tasks: List[asyncio.Task] = []
@@ -528,8 +642,9 @@ class RealtimePoller:
         )
         # Spawn one worker loop per feed plus leader renewal loop
         self._tasks.append(asyncio.create_task(self._leader_supervision_loop()))
-        for cfg in feed_configs:
-            self._tasks.append(asyncio.create_task(self._feed_polling_loop(cfg)))
+        for idx, cfg in enumerate(feed_configs):
+            stagger = (idx * 3.5) + 1.0
+            self._tasks.append(asyncio.create_task(self._feed_polling_loop(cfg, initial_stagger=stagger)))
 
     async def stop(self) -> None:
         self._running = False
@@ -557,9 +672,9 @@ class RealtimePoller:
     async def _is_leader(self) -> bool:
         return await self.cache.renew_leader_lock("gtfs_rt_leader", self.worker_id, ttl=self.lock_ttl)
 
-    async def _feed_polling_loop(self, cfg: FeedConfig) -> None:
-        # Initial stagger
-        await asyncio.sleep(1.0)
+    async def _feed_polling_loop(self, cfg: FeedConfig, initial_stagger: float = 1.0) -> None:
+        # Stagger initial feed start times to avoid simultaneous download/parse CPU spikes
+        await asyncio.sleep(initial_stagger)
         while self._running:
             start_time = time.time()
             if await self._is_leader():
@@ -596,11 +711,13 @@ class RealtimePoller:
             while attempt <= self.max_retries and not success:
                 attempt += 1
                 try:
-                    assert self._client is not None
-                    resp = await self._client.get(cfg.url, headers=headers)
-                    meta.http_status = resp.status_code
+                    # Download & parse completely off the event loop in a dedicated worker thread
+                    status_code, resp_headers, entities, inc = await asyncio.to_thread(
+                        _download_and_parse_worker, cfg.url, headers, cfg.name, self.timeout
+                    )
+                    meta.http_status = status_code
 
-                    if resp.status_code == 304:
+                    if status_code == 304:
                         # Not modified: retain cached snapshot and reset errors
                         log.debug("Feed %s not modified (304)", cfg.name)
                         meta.error_count = 0
@@ -612,21 +729,11 @@ class RealtimePoller:
                         await self.cache.update_snapshot(cfg.name, [], meta, is_differential=True)
                         return
 
-                    resp.raise_for_status()
-
-                    # Validate payload
-                    content = resp.content
-                    if not content or len(content) < 4:
-                        raise ValueError(f"Received empty or truncated payload ({len(content)} bytes)")
-
-                    # Parse & Normalize
-                    entities, inc = parse_feed_message(content, cfg.name)
-
                     # Store headers
-                    if "ETag" in resp.headers:
-                        cfg.etag = resp.headers["ETag"]
-                    if "Last-Modified" in resp.headers:
-                        cfg.last_modified = resp.headers["Last-Modified"]
+                    if "ETag" in resp_headers:
+                        cfg.etag = resp_headers["ETag"]
+                    if "Last-Modified" in resp_headers:
+                        cfg.last_modified = resp_headers["Last-Modified"]
 
                     # Update metadata
                     meta.incrementality = inc

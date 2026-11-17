@@ -121,59 +121,72 @@ class MemoryCacheStore(CacheStore):
         self._index_by_stop: Dict[str, Set[Tuple[str, str]]] = {}
         # vehicle_id -> (feed_name, entity_id)
         self._index_by_vehicle: Dict[str, Tuple[str, str]] = {}
+        # Per-feed secondary index cache: feed_name -> (by_route, by_trip, by_stop, by_vehicle)
+        self._feed_indices: Dict[str, Tuple[Dict[str, Set[Tuple[str, str]]], Dict[str, Set[Tuple[str, str]]], Dict[str, Set[Tuple[str, str]]], Dict[str, Tuple[str, str]]]] = {}
 
         # Local process lock
         self._leader_id: Optional[str] = None
         self._lock_expiry: float = 0.0
 
+    @staticmethod
+    def _build_single_feed_indices(
+        feed_name: str,
+        entities: Dict[str, Dict[str, Any]],
+    ) -> Tuple[Dict[str, Set[str]], Dict[str, Set[str]], Dict[str, Set[str]], Dict[str, str]]:
+        """Build index only for this feed in worker thread with cooperative GIL yielding."""
+        by_route: Dict[str, Set[str]] = {}
+        by_trip: Dict[str, Set[str]] = {}
+        by_stop: Dict[str, Set[str]] = {}
+        by_vehicle: Dict[str, str] = {}
+
+        count = 0
+        for entity_id, e in entities.items():
+            count += 1
+            if count % 150 == 0:
+                time.sleep(0.002)
+
+            # Route
+            route_id = e.get("route_id")
+            if route_id:
+                by_route.setdefault(str(route_id), set()).add(entity_id)
+
+            # Trip
+            trip_id = e.get("trip_id")
+            if trip_id:
+                by_trip.setdefault(str(trip_id), set()).add(entity_id)
+
+            # Vehicle
+            vehicle_id = e.get("vehicle_id") or (e.get("vehicle") or {}).get("id")
+            if vehicle_id:
+                by_vehicle[str(vehicle_id)] = entity_id
+
+            # Stops from Trip Updates
+            for stu in e.get("stop_time_updates", []):
+                sid = stu.get("stop_id")
+                if sid:
+                    by_stop.setdefault(str(sid), set()).add(entity_id)
+
+            # Stop and Route from Alerts
+            for ie in e.get("informed_entities", []):
+                rid = ie.get("route_id")
+                if rid:
+                    by_route.setdefault(str(rid), set()).add(entity_id)
+                tid = ie.get("trip_id")
+                if tid:
+                    by_trip.setdefault(str(tid), set()).add(entity_id)
+                sid = ie.get("stop_id")
+                if sid:
+                    by_stop.setdefault(str(sid), set()).add(entity_id)
+
+        return by_route, by_trip, by_stop, by_vehicle
+
     def _rebuild_indices_locked(self) -> None:
-        """Rebuild secondary indices across all feeds."""
-        by_route: Dict[str, Set[Tuple[str, str]]] = {}
-        by_trip: Dict[str, Set[Tuple[str, str]]] = {}
-        by_stop: Dict[str, Set[Tuple[str, str]]] = {}
-        by_vehicle: Dict[str, Tuple[str, str]] = {}
-
-        for feed_name, entities in self._feeds.items():
-            for entity_id, e in entities.items():
-                ref = (feed_name, entity_id)
-
-                # Route
-                route_id = e.get("route_id")
-                if route_id:
-                    by_route.setdefault(str(route_id), set()).add(ref)
-
-                # Trip
-                trip_id = e.get("trip_id")
-                if trip_id:
-                    by_trip.setdefault(str(trip_id), set()).add(ref)
-
-                # Vehicle
-                vehicle_id = e.get("vehicle_id") or (e.get("vehicle") or {}).get("id")
-                if vehicle_id:
-                    by_vehicle[str(vehicle_id)] = ref
-
-                # Stops from Trip Updates
-                for stu in e.get("stop_time_updates", []):
-                    sid = stu.get("stop_id")
-                    if sid:
-                        by_stop.setdefault(str(sid), set()).add(ref)
-
-                # Stop and Route from Alerts
-                for ie in e.get("informed_entities", []):
-                    rid = ie.get("route_id")
-                    if rid:
-                        by_route.setdefault(str(rid), set()).add(ref)
-                    tid = ie.get("trip_id")
-                    if tid:
-                        by_trip.setdefault(str(tid), set()).add(ref)
-                    sid = ie.get("stop_id")
-                    if sid:
-                        by_stop.setdefault(str(sid), set()).add(ref)
-
-        self._index_by_route = by_route
-        self._index_by_trip = by_trip
-        self._index_by_stop = by_stop
-        self._index_by_vehicle = by_vehicle
+        """Rebuild secondary indices per feed (synchronous fallback)."""
+        feeds_copy = dict(self._feeds)
+        all_indices = {}
+        for fname, f_entities in feeds_copy.items():
+            all_indices[fname] = self._build_single_feed_indices(fname, f_entities)
+        self._feed_indices = all_indices
 
     def _get_metadata_locked(self, feed_name: str) -> FeedMetadata:
         meta = self._metadata.get(feed_name)
@@ -192,6 +205,30 @@ class MemoryCacheStore(CacheStore):
             return meta.model_copy(deep=True)
         return meta.copy(deep=True)
 
+    @staticmethod
+    def _process_snapshot_worker(
+        feed_name: str,
+        entities: List[Dict[str, Any]],
+        is_differential: bool,
+        current_feed: Dict[str, Dict[str, Any]],
+    ):
+        """Build new feed mapping and updated secondary indices in worker thread without multi-feed merging."""
+        if not is_differential:
+            new_map = {e["entity_id"]: e for e in entities if "entity_id" in e}
+        else:
+            new_map = dict(current_feed)
+            for e in entities:
+                eid = e.get("entity_id")
+                if not eid:
+                    continue
+                if e.get("is_deleted"):
+                    new_map.pop(eid, None)
+                else:
+                    new_map[eid] = e
+
+        feed_idx = MemoryCacheStore._build_single_feed_indices(feed_name, new_map)
+        return new_map, feed_idx
+
     async def update_snapshot(
         self,
         feed_name: str,
@@ -200,24 +237,22 @@ class MemoryCacheStore(CacheStore):
         is_differential: bool = False,
     ) -> None:
         async with self._lock:
-            if not is_differential:
-                new_map = {e["entity_id"]: e for e in entities if "entity_id" in e}
-                self._feeds[feed_name] = new_map
-            else:
-                current_map = self._feeds.setdefault(feed_name, {}).copy()
-                for e in entities:
-                    eid = e.get("entity_id")
-                    if not eid:
-                        continue
-                    if e.get("is_deleted"):
-                        current_map.pop(eid, None)
-                    else:
-                        current_map[eid] = e
-                self._feeds[feed_name] = current_map
+            current_feed = self._feeds.get(feed_name, {})
 
-            metadata.entity_count = len(self._feeds[feed_name])
+        # Offload dict construction and index building to worker thread
+        new_map, feed_idx = await asyncio.to_thread(
+            self._process_snapshot_worker,
+            feed_name,
+            entities,
+            is_differential,
+            current_feed,
+        )
+
+        async with self._lock:
+            self._feeds[feed_name] = new_map
+            self._feed_indices[feed_name] = feed_idx
+            metadata.entity_count = len(new_map)
             self._metadata[feed_name] = metadata
-            self._rebuild_indices_locked()
 
     async def get_feed_names(self) -> List[str]:
         async with self._lock:
@@ -246,57 +281,72 @@ class MemoryCacheStore(CacheStore):
         rid = str(route_id)
         res = RouteRealtime(route_id=rid)
         async with self._lock:
-            refs = self._index_by_route.get(rid, set())
-            for feed_name, eid in refs:
-                item = self._feeds.get(feed_name, {}).get(eid)
-                if not item:
+            for feed_name, indices in self._feed_indices.items():
+                by_r = indices[0] if indices else {}
+                eids = by_r.get(rid)
+                if not eids:
                     continue
-                if feed_name in ("trip_updates", "train_updates") or "trip" in feed_name or "train" in feed_name or "update" in feed_name:
-                    res.trip_updates.append(TripUpdate(**item))
-                elif feed_name == "vehicle_positions" or "vehicle" in feed_name:
-                    res.vehicles.append(VehiclePosition(**item))
-                elif feed_name == "alerts" or "alert" in feed_name:
-                    res.alerts.append(Alert(**item))
+                feed_items = self._feeds.get(feed_name, {})
+                for eid in eids:
+                    item = feed_items.get(eid)
+                    if not item:
+                        continue
+                    if feed_name in ("trip_updates", "train_updates") or "trip" in feed_name or "train" in feed_name or "update" in feed_name:
+                        res.trip_updates.append(TripUpdate(**item))
+                    elif feed_name == "vehicle_positions" or "vehicle" in feed_name:
+                        res.vehicles.append(VehiclePosition(**item))
+                    elif feed_name == "alerts" or "alert" in feed_name:
+                        res.alerts.append(Alert(**item))
         return res
 
     async def get_by_trip(self, trip_id: str) -> TripRealtime:
         tid = str(trip_id)
         res = TripRealtime(trip_id=tid)
         async with self._lock:
-            refs = self._index_by_trip.get(tid, set())
-            for feed_name, eid in refs:
-                item = self._feeds.get(feed_name, {}).get(eid)
-                if not item:
+            for feed_name, indices in self._feed_indices.items():
+                by_t = indices[1] if indices else {}
+                eids = by_t.get(tid)
+                if not eids:
                     continue
-                if (feed_name in ("trip_updates", "train_updates") or "trip" in feed_name or "train" in feed_name or "update" in feed_name) and not res.trip_update:
-                    res.trip_update = TripUpdate(**item)
-                elif (feed_name == "vehicle_positions" or "vehicle" in feed_name) and not res.vehicle:
-                    res.vehicle = VehiclePosition(**item)
+                feed_items = self._feeds.get(feed_name, {})
+                for eid in eids:
+                    item = feed_items.get(eid)
+                    if not item:
+                        continue
+                    if (feed_name in ("trip_updates", "train_updates") or "trip" in feed_name or "train" in feed_name or "update" in feed_name) and not res.trip_update:
+                        res.trip_update = TripUpdate(**item)
+                    elif (feed_name == "vehicle_positions" or "vehicle" in feed_name) and not res.vehicle:
+                        res.vehicle = VehiclePosition(**item)
         return res
 
     async def get_by_stop(self, stop_id: str) -> StopRealtime:
         sid = str(stop_id)
         res = StopRealtime(stop_id=sid)
         async with self._lock:
-            refs = self._index_by_stop.get(sid, set())
-            for feed_name, eid in refs:
-                item = self._feeds.get(feed_name, {}).get(eid)
-                if not item:
+            for feed_name, indices in self._feed_indices.items():
+                by_s = indices[2] if indices else {}
+                eids = by_s.get(sid)
+                if not eids:
                     continue
-                if feed_name in ("trip_updates", "train_updates") or "trip" in feed_name or "train" in feed_name or "update" in feed_name:
-                    for stu in item.get("stop_time_updates", []):
-                        if str(stu.get("stop_id")) == sid:
-                            res.upcoming_updates.append({
-                                "trip_id": item.get("trip_id"),
-                                "route_id": item.get("route_id"),
-                                "feed_source": feed_source if (feed_source := item.get("feed_source")) else feed_name,
-                                "stop_sequence": stu.get("stop_sequence"),
-                                "arrival": stu.get("arrival"),
-                                "departure": stu.get("departure"),
-                                "schedule_relationship": stu.get("schedule_relationship"),
-                            })
-                elif feed_name == "alerts" or "alert" in feed_name:
-                    res.alerts.append(Alert(**item))
+                feed_items = self._feeds.get(feed_name, {})
+                for eid in eids:
+                    item = feed_items.get(eid)
+                    if not item:
+                        continue
+                    if feed_name in ("trip_updates", "train_updates") or "trip" in feed_name or "train" in feed_name or "update" in feed_name:
+                        for stu in item.get("stop_time_updates", []):
+                            if str(stu.get("stop_id")) == sid:
+                                res.upcoming_updates.append({
+                                    "trip_id": item.get("trip_id"),
+                                    "route_id": item.get("route_id"),
+                                    "feed_source": item.get("feed_source") or feed_name,
+                                    "stop_sequence": stu.get("stop_sequence"),
+                                    "arrival": stu.get("arrival"),
+                                    "departure": stu.get("departure"),
+                                    "schedule_relationship": stu.get("schedule_relationship"),
+                                })
+                    elif feed_name == "alerts" or "alert" in feed_name:
+                        res.alerts.append(Alert(**item))
         return res
 
     async def acquire_leader_lock(self, lock_key: str, worker_id: str, ttl: int = 45) -> bool:

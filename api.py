@@ -26,6 +26,14 @@ import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
+import sys
+
+if sys.platform == "win32":
+    try:
+        import ctypes
+        ctypes.windll.winmm.timeBeginPeriod(1)
+    except Exception:
+        pass
 
 from fastapi import FastAPI, HTTPException, Query, Response
 from pydantic import BaseModel, Field
@@ -141,9 +149,47 @@ async def lifespan(app: FastAPI):
     try:
         import asyncio
         await asyncio.to_thread(_ensure_multi_db_index_synced)
+        # Pre-warm active routes cache for today across all configured databases
+        def _warm_active_routes():
+            today = date.today()
+            warm_paths = set(DB_PATHS.values())
+            if DB_PATH:
+                warm_paths.add(DB_PATH)
+            for p in warm_paths:
+                if p and p.exists():
+                    try:
+                        with _open_db(p) as conn:
+                            _get_active_routes_for_date(conn, p, today)
+                    except Exception:
+                        pass
+            # Pre-warm route listing & stats cache on boot so the 1st HTTP request is sub-20ms
+            for reg in ("netherlands-gtfs", "norway-gtfs", "UAE"):
+                try:
+                    all_routes(
+                        agency_id=None,
+                        q=None,
+                        transit_mode=None,
+                        transitMode=None,
+                        route_type=None,
+                        on_date=None,
+                        lang="en",
+                        region=reg,
+                        region_id=None,
+                        regionId=None,
+                        mode="transit",
+                        running_today=True,
+                        runningToday=None,
+                        scheduled_today=None,
+                        offset=0,
+                        limit=50,
+                        include_between_stops=False,
+                    )
+                except Exception:
+                    pass
+        await asyncio.to_thread(_warm_active_routes)
     except Exception as exc:
         import logging
-        logging.getLogger("api").warning("Failed to warm multi-db index: %s", exc)
+        logging.getLogger("api").warning("Failed to warm multi-db index / active routes: %s", exc)
     poller = None
     if os.environ.get("REALTIME_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on"):
         try:
@@ -293,9 +339,13 @@ def _open_db(db_path: Path):
                     pass
                 _WAL_INITIALIZED_DBS.add(resolved_key)
     # Larger cache speeds up join-heavy queries; memory-mapped I/O avoids syscall overhead.
-    conn.execute("PRAGMA cache_size=-32768")   # 32 MB page cache
-    conn.execute("PRAGMA mmap_size=268435456") # 256 MB memory-mapped I/O
+    conn.execute("PRAGMA cache_size=-65536")    # 64 MB page cache
+    conn.execute("PRAGMA mmap_size=1073741824") # 1 GB memory-mapped I/O
     conn.execute("PRAGMA temp_store=MEMORY")
+    try:
+        conn.execute("PRAGMA threads=4")
+    except Exception:
+        pass
     try:
         yield conn
     finally:
@@ -427,23 +477,44 @@ _LIGHT_INDEX_SPECS = [
     ("idx_routes_short_name", "routes", ["route_short_name"]),
     ("idx_routes_long_name", "routes", ["route_long_name"]),
     ("idx_routes_type", "routes", ["route_type"]),
+    ("idx_routes_type_id", "routes", ["route_type", "route_id"]),
     ("idx_routes_agency_short", "routes", ["agency_id", "route_short_name"]),
+    ("idx_routes_agency_id", "routes", ["agency_id", "route_id"]),
     ("idx_stops_name", "stops", ["stop_name"]),
     ("idx_stops_code", "stops", ["stop_code"]),
     ("idx_stops_parent_station", "stops", ["parent_station"]),
     ("idx_stops_lat_lon", "stops", ["stop_lat", "stop_lon"]),
+    ("idx_stops_loc_lat_lon", "stops", ["location_type", "stop_lat", "stop_lon"]),
     ("idx_calendar_dates_date", "calendar_dates", ["date"]),
+    ("idx_calendar_dates_date_exc", "calendar_dates", ["date", "exception_type", "service_id"]),
+    ("idx_calendar_dates_service_date", "calendar_dates", ["service_id", "date", "exception_type"]),
+    ("idx_calendar_dates", "calendar", ["start_date", "end_date", "service_id"]),
+    ("idx_calendar_service", "calendar", ["service_id"]),
 ]
 
 _HEAVY_INDEX_SPECS = [
-    ("idx_stop_times_stop_trip", "stop_times", ["stop_id", "trip_id"]),
-    ("idx_stop_times_trip_stop", "stop_times", ["trip_id", "stop_id"]),
-    ("idx_stop_times_trip_seq_stop", "stop_times", ["trip_id", "stop_sequence", "stop_id"]),
-    ("idx_trips_trip_route_hs", "trips", ["trip_id", "route_id", "trip_headsign"]),
+    # stop_times: departure and arrival queries (next-departures, timetable, realtime delays)
+    ("idx_stop_times_stop_dep", "stop_times", ["stop_id", "departure_time", "trip_id"]),
+    ("idx_stop_times_trip_seq_dep", "stop_times", ["trip_id", "stop_sequence", "departure_time", "arrival_time", "stop_id"]),
+    ("idx_stop_times_stop_arr", "stop_times", ["stop_id", "arrival_time", "trip_id"]),
+
+    # trips: direction, service, headsigns, routes
+    ("idx_trips_route_dir_headsign", "trips", ["route_id", "direction_id", "trip_headsign", "trip_id"]),
     ("idx_trips_route_service_trip", "trips", ["route_id", "service_id", "trip_id"]),
-    ("idx_trips_route_headsign", "trips", ["route_id", "trip_headsign"]),
+    ("idx_trips_trip_route_hs", "trips", ["trip_id", "route_id", "trip_headsign"]),
     ("idx_trips_route_shape_trip", "trips", ["route_id", "shape_id", "trip_id"]),
-    ("idx_shapes_id_seq", "shapes", ["shape_id", "shape_pt_sequence"]),
+    ("idx_trips_service_id", "trips", ["service_id", "trip_id"]),
+    ("idx_trips_block_id", "trips", ["block_id"]),
+
+    # shapes: covering index so full shape rendering avoids reading table pages
+    ("idx_shapes_covering", "shapes", ["shape_id", "shape_pt_sequence", "shape_pt_lon", "shape_pt_lat"]),
+
+    # transfers
+    ("idx_transfers_from_to", "transfers", ["from_stop_id", "to_stop_id"]),
+    ("idx_transfers_to_from", "transfers", ["to_stop_id", "from_stop_id"]),
+
+    # frequencies
+    ("idx_frequencies_trip_start", "frequencies", ["trip_id", "start_time", "end_time"]),
 ]
 
 
@@ -514,18 +585,22 @@ def _ensure_stop_routes_table(conn: sqlite3.Connection) -> None:
         SELECT DISTINCT st.stop_id AS stop_id, t.route_id AS route_id,
                COALESCE(t.trip_headsign, '') AS headsign
         FROM stop_times st JOIN trips t ON t.trip_id = st.trip_id;
-        CREATE INDEX idx_stop_routes_stop ON stop_routes(stop_id);
+        CREATE INDEX IF NOT EXISTS idx_stop_routes_stop ON stop_routes(stop_id);
+        CREATE INDEX IF NOT EXISTS idx_stop_routes_stop_route ON stop_routes(stop_id, route_id);
+        CREATE INDEX IF NOT EXISTS idx_stop_routes_route_stop ON stop_routes(route_id, stop_id);
     """)
     conn.commit()
 
 
-def _ensure_sqlite_search_indexes(db_path: Path, size_bytes: int) -> None:
+def _ensure_sqlite_search_indexes(db_path: Path, size_bytes: int = 0) -> None:
     """Ensure fast search indexes exist on a newly discovered/updated SQLite DB."""
-    specs = list(_LIGHT_INDEX_SPECS)
-    if size_bytes < 200 * 1024 * 1024:
-        specs.extend(_HEAVY_INDEX_SPECS)
+    specs = list(_LIGHT_INDEX_SPECS) + list(_HEAVY_INDEX_SPECS)
     try:
         conn = sqlite3.connect(db_path, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA cache_size=-128000")
+        conn.execute("PRAGMA temp_store=MEMORY")
         _ensure_stop_routes_table(conn)
         existing = {
             r[0]
@@ -559,6 +634,12 @@ def _ensure_sqlite_search_indexes(db_path: Path, size_bytes: int) -> None:
                 )
                 created_any = True
         if created_any:
+            try:
+                conn.execute("PRAGMA analysis_limit = 1000")
+                conn.execute("ANALYZE")
+                conn.execute("PRAGMA optimize")
+            except Exception:
+                pass
             conn.commit()
         conn.close()
     except Exception:
@@ -739,9 +820,12 @@ def _get_all_regions_info(force_refresh: bool = False) -> list[dict]:
     return [_inspect_database(p, force_refresh=force_refresh) for p in paths]
 
 
-def _resolve_region_db(region: str) -> tuple[Path, dict]:
+def _resolve_region_db(region: Optional[str]) -> tuple[Path, dict]:
     """Resolve a region identifier, slug, alias, or database filename to (Path, info)."""
-    target = region.strip().lower()
+    if not region:
+        default_db = DB_PATHS.get(DEFAULT_MODE) or DB_PATH
+        return default_db, _inspect_database(default_db)
+    target = str(region).strip().lower()
     clean_target = target.replace("-", " ").replace("_", " ")
     regions = _get_all_regions_info()
     for reg in regions:
@@ -1211,7 +1295,8 @@ def _reverse_geocode(lat: float, lon: float, sync: bool = True) -> dict:
 
     if not sync:
         threading.Thread(target=_fetch, daemon=True).start()
-        return empty_res
+        with _GEOCODE_LOCK:
+            return _GEOCODE_CACHE.get(key, empty_res)
 
     _fetch()
     with _GEOCODE_LOCK:
@@ -1479,32 +1564,61 @@ def region_agencies(
                         r[0]: r[1]
                         for r in conn.execute("SELECT agency_id, COUNT(*) FROM routes GROUP BY agency_id").fetchall()
                     }
-                    if len(rows) == 1:
-                        aid = rows[0]["agency_id"]
-                        sc = conn.execute(
-                            """
-                            SELECT COUNT(DISTINCT st.stop_id)
-                            FROM stop_times st
-                            JOIN trips  t ON st.trip_id  = t.trip_id
-                            JOIN routes r ON t.route_id  = r.route_id
-                            WHERE r.agency_id = ?
-                            """,
-                            (aid,),
-                        ).fetchone()[0]
-                        stop_counts = {aid: sc}
-                    else:
-                        stop_counts = {
-                            r[0]: r[1]
-                            for r in conn.execute(
+                    has_stop_routes = conn.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='stop_routes'"
+                    ).fetchone() is not None
+                    if has_stop_routes:
+                        if len(rows) == 1:
+                            aid = rows[0]["agency_id"]
+                            sc = conn.execute(
                                 """
-                                SELECT r.agency_id, COUNT(DISTINCT st.stop_id)
+                                SELECT COUNT(DISTINCT sr.stop_id)
+                                FROM stop_routes sr
+                                JOIN routes r ON sr.route_id = r.route_id
+                                WHERE r.agency_id = ?
+                                """,
+                                (aid,),
+                            ).fetchone()[0]
+                            stop_counts = {aid: sc}
+                        else:
+                            stop_counts = {
+                                r[0]: r[1]
+                                for r in conn.execute(
+                                    """
+                                    SELECT r.agency_id, COUNT(DISTINCT sr.stop_id)
+                                    FROM stop_routes sr
+                                    JOIN routes r ON sr.route_id = r.route_id
+                                    GROUP BY r.agency_id
+                                    """
+                                ).fetchall()
+                            }
+                    else:
+                        if len(rows) == 1:
+                            aid = rows[0]["agency_id"]
+                            sc = conn.execute(
+                                """
+                                SELECT COUNT(DISTINCT st.stop_id)
                                 FROM stop_times st
                                 JOIN trips  t ON st.trip_id  = t.trip_id
                                 JOIN routes r ON t.route_id  = r.route_id
-                                GROUP BY r.agency_id
-                                """
-                            ).fetchall()
-                        }
+                                WHERE r.agency_id = ?
+                                """,
+                                (aid,),
+                            ).fetchone()[0]
+                            stop_counts = {aid: sc}
+                        else:
+                            stop_counts = {
+                                r[0]: r[1]
+                                for r in conn.execute(
+                                    """
+                                    SELECT r.agency_id, COUNT(DISTINCT st.stop_id)
+                                    FROM stop_times st
+                                    JOIN trips  t ON st.trip_id  = t.trip_id
+                                    JOIN routes r ON t.route_id  = r.route_id
+                                    GROUP BY r.agency_id
+                                    """
+                                ).fetchall()
+                            }
                     _AGENCY_COUNTS_CACHE[cache_key] = (route_counts, stop_counts)
                 except Exception:
                     pass
@@ -1617,24 +1731,40 @@ def _query_active_stops_for_candidates(
         if not all_platforms:
             return []
 
+        has_stop_routes = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='stop_routes'"
+        ).fetchone() is not None
+
         route_filter_sql = ""
         route_params: list = list(all_platforms)
         if route_type is not None:
-            route_filter_sql = " WHERE CAST(r.route_type AS INTEGER) = ?"
             route_params.append(route_type)
 
         ph_plat = ",".join("?" * len(all_platforms))
-        routes_query = f"""
-            SELECT sub.stop_id, r.route_id, r.route_short_name, r.route_long_name,
-                   r.route_type, r.route_color, sub.trip_headsign
-            FROM (
-                SELECT DISTINCT st.stop_id, t.route_id, t.trip_headsign
-                FROM stop_times st
-                JOIN trips t ON st.trip_id = t.trip_id
-                WHERE st.stop_id IN ({ph_plat})
-            ) sub
-            JOIN routes r ON sub.route_id = r.route_id{route_filter_sql}
-        """
+        if has_stop_routes:
+            if route_type is not None:
+                route_filter_sql = " AND CAST(r.route_type AS INTEGER) = ?"
+            routes_query = f"""
+                SELECT sr.stop_id, r.route_id, r.route_short_name, r.route_long_name,
+                       r.route_type, r.route_color, sr.headsign AS trip_headsign
+                FROM stop_routes sr
+                JOIN routes r ON sr.route_id = r.route_id
+                WHERE sr.stop_id IN ({ph_plat}){route_filter_sql}
+            """
+        else:
+            if route_type is not None:
+                route_filter_sql = " WHERE CAST(r.route_type AS INTEGER) = ?"
+            routes_query = f"""
+                SELECT sub.stop_id, r.route_id, r.route_short_name, r.route_long_name,
+                       r.route_type, r.route_color, sub.trip_headsign
+                FROM (
+                    SELECT DISTINCT st.stop_id, t.route_id, t.trip_headsign
+                    FROM stop_times st
+                    JOIN trips t ON st.trip_id = t.trip_id
+                    WHERE st.stop_id IN ({ph_plat})
+                ) sub
+                JOIN routes r ON sub.route_id = r.route_id{route_filter_sql}
+            """
         stop_routes_map: dict[str, list] = {}
         for r in conn.execute(routes_query, route_params).fetchall():
             sid = r["stop_id"]
@@ -1717,14 +1847,14 @@ def _search_active_stops_hierarchy(
             "location": {"lat": lat, "lon": lon},
             "error": "No transit database found covering these coordinates.",
             "database": None,
-            "geo": _reverse_geocode(lat, lon),
+            "geo": _reverse_geocode(lat, lon, sync=False),
             "count": 0,
             "stops": [],
         }
 
     db_path, reg_info = found
     grid = _get_spatial_grid(db_path)
-    geo = _reverse_geocode(lat, lon)
+    geo = _reverse_geocode(lat, lon, sync=False)
     searched_levels = []
 
     # ── Level 1: 500m Radius ──────────────────────────────────────────────────
@@ -1892,9 +2022,12 @@ def _query_active_routes_for_candidates(
                 JOIN routes r ON sub.route_id = r.route_id
                 LEFT JOIN agency a ON r.agency_id = a.agency_id{route_filter_sql}
             """
+        active_routes_today = _get_active_routes_for_date(conn, db_path, date.today())
         route_dict: dict[str, dict] = {}
         for row in conn.execute(query, params).fetchall():
             rid = row["route_id"]
+            if active_routes_today and rid not in active_routes_today:
+                continue
             sid = row["stop_id"]
             stop_info = stop_map.get(sid)
             if not stop_info:
@@ -2654,6 +2787,12 @@ def agency_detail(
 ):
     """Return a single agency by agency_id."""
     target_region = regionId or region_id or region
+    if not target_region:
+        try:
+            db_path = _find_db_for_agency(agency_id, mode=mode)
+            target_region = db_path.stem
+        except Exception:
+            target_region = DEFAULT_MODE
     return region_agencies(target_region, agency_id=agency_id, include_counts=True, lang=lang or "en")
 
 
@@ -2672,8 +2811,21 @@ def agency_routes(
                     "(water) or 'rail'. All are served by this one API; the "
                     "endpoint paths are identical.",
     ),
+    running_today: bool = Query(
+        default=True,
+        description="Only list routes that have scheduled trips for today (default True). "
+                    "Set to false to include unscheduled routes.",
+    ),
+    runningToday: Optional[bool] = Query(default=None, description="Alias for running_today (camelCase)"),
+    scheduled_today: Optional[bool] = Query(default=None, description="Alias for running_today"),
 ):
     """Paginated routes belonging to *agency_id*."""
+    should_filter_running = running_today
+    for alias_val in (runningToday, scheduled_today):
+        if alias_val is not None:
+            should_filter_running = alias_val
+            break
+
     db_path = _find_db_for_agency(agency_id, region=region, region_id=region_id, regionId=regionId, mode=mode)
     with _open_db(db_path) as conn:
         if not _agency_rows(conn, agency_id):
@@ -2681,30 +2833,55 @@ def agency_routes(
                 status_code=404,
                 detail=f"agency_id '{agency_id}' not found in mode '{mode}'",
             )
-        total = conn.execute(
-            "SELECT COUNT(*) FROM routes WHERE agency_id = ?", (agency_id,)
-        ).fetchone()[0]
-        rows = conn.execute(
-            """
-            SELECT route_id, route_short_name, route_long_name, route_color,
-                   route_text_color, route_type, route_url, agency_id
-            FROM routes
-            WHERE agency_id = ?
-            ORDER BY route_short_name
-            LIMIT ? OFFSET ?
-            """,
-            (agency_id, limit, offset),
-        ).fetchall()
+        if should_filter_running:
+            active_route_ids = _get_active_routes_for_date(conn, db_path, date.today())
+            if not active_route_ids:
+                return {
+                    "agency_id": agency_id,
+                    "total": 0,
+                    "offset": offset,
+                    "limit": limit,
+                    "routes": [],
+                }
+            all_agency_routes = conn.execute(
+                """
+                SELECT route_id, route_short_name, route_long_name, route_color,
+                       route_text_color, route_type, route_url, agency_id
+                FROM routes
+                WHERE agency_id = ?
+                ORDER BY route_short_name
+                """,
+                (agency_id,),
+            ).fetchall()
+            filtered_routes = [r for r in all_agency_routes if r["route_id"] in active_route_ids]
+            total = len(filtered_routes)
+            rows = filtered_routes[offset : offset + limit]
+        else:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM routes WHERE agency_id = ?", (agency_id,)
+            ).fetchone()[0]
+            rows = conn.execute(
+                """
+                SELECT route_id, route_short_name, route_long_name, route_color,
+                       route_text_color, route_type, route_url, agency_id
+                FROM routes
+                WHERE agency_id = ?
+                ORDER BY route_short_name
+                LIMIT ? OFFSET ?
+                """,
+                (agency_id, limit, offset),
+            ).fetchall()
         route_ids = [r["route_id"] for r in rows]
         headsigns_map: dict = {}
         if route_ids:
             placeholders = ",".join("?" for _ in route_ids)
             for tr in conn.execute(
                 f"""
-                SELECT route_id, trip_headsign
+                SELECT DISTINCT route_id, trip_headsign
                 FROM trips
                 WHERE route_id IN ({placeholders})
-                GROUP BY route_id, trip_headsign
+                  AND trip_headsign IS NOT NULL
+                  AND trip_headsign != ''
                 """,
                 route_ids,
             ).fetchall():
@@ -2961,33 +3138,104 @@ def _active_services(conn: sqlite3.Connection, on_date: date) -> set[str]:
     Return the set of service_ids active on *on_date*, applying calendar_dates
     exceptions (type 1 = added, type 2 = removed) on top of the base calendar.
     """
-    day_col    = _DAY_COLS[on_date.weekday()]
-    date_str   = on_date.strftime("%Y%m%d")
+    day_col = _DAY_COLS[on_date.weekday()]
+    date_str = on_date.strftime("%Y%m%d")
+
+    tables = {
+        r[0]
+        for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    active = set()
 
     # Base services active on this weekday and within their date range
-    base_rows = conn.execute(
-        f"""
-        SELECT service_id FROM calendar
-        WHERE  {day_col} = '1'
-          AND  start_date <= ?
-          AND  end_date   >= ?
-        """,
-        (date_str, date_str),
-    ).fetchall()
-    active = {r[0] for r in base_rows}
+    if "calendar" in tables:
+        base_rows = conn.execute(
+            f"""
+            SELECT service_id FROM calendar
+            WHERE  {day_col} = '1'
+              AND  start_date <= ?
+              AND  end_date   >= ?
+            """,
+            (date_str, date_str),
+        ).fetchall()
+        active = {r[0] for r in base_rows}
 
     # Apply exceptions
-    exc_rows = conn.execute(
-        "SELECT service_id, exception_type FROM calendar_dates WHERE date = ?",
-        (date_str,),
-    ).fetchall()
-    for service_id, exc_type in exc_rows:
-        if exc_type == "1":
-            active.add(service_id)
-        elif exc_type == "2":
-            active.discard(service_id)
+    if "calendar_dates" in tables:
+        exc_rows = conn.execute(
+            "SELECT service_id, exception_type FROM calendar_dates WHERE date = ?",
+            (date_str,),
+        ).fetchall()
+        for service_id, exc_type in exc_rows:
+            if str(exc_type) == "1":
+                active.add(service_id)
+            elif str(exc_type) == "2":
+                active.discard(service_id)
 
     return active
+
+
+_ACTIVE_ROUTES_FOR_DATE_CACHE: dict[tuple[str, str], set[str]] = {}
+_ACTIVE_ROUTES_LOCK = threading.Lock()
+_ACTIVE_ROUTE_ROWS_CACHE: dict[tuple, list[dict]] = {}
+_ACTIVE_ROUTE_ROWS_LOCK = threading.Lock()
+_ROUTE_STATIC_META_CACHE: dict[tuple[str, str], dict] = {}
+_ROUTE_STATIC_META_LOCK = threading.Lock()
+_ROUTE_TRIPS_TODAY_CACHE: dict[tuple[str, str, str], int] = {}
+_ROUTE_TRIPS_TODAY_LOCK = threading.Lock()
+
+
+def _get_active_routes_for_date(
+    conn: sqlite3.Connection, db_path: Path, on_date: date
+) -> set[str]:
+    """
+    Return set of route_ids that have scheduled trips on *on_date*
+    (including trips from previous day spilling past midnight).
+    Cached per (db_path, date) to ensure sub-millisecond route listings.
+    """
+    resolved_path = str(db_path.resolve())
+    date_key = on_date.isoformat()
+    cache_key = (resolved_path, date_key)
+
+    if cache_key in _ACTIVE_ROUTES_FOR_DATE_CACHE:
+        return _ACTIVE_ROUTES_FOR_DATE_CACHE[cache_key]
+
+    with _ACTIVE_ROUTES_LOCK:
+        if cache_key in _ACTIVE_ROUTES_FOR_DATE_CACHE:
+            return _ACTIVE_ROUTES_FOR_DATE_CACHE[cache_key]
+
+        # Active services for today + yesterday (for spillover >24h trips)
+        active_today = _active_services(conn, on_date)
+        prev_date = on_date - timedelta(days=1)
+        active_prev = _active_services(conn, prev_date)
+        all_services = active_today | active_prev
+
+        if not all_services:
+            _ACTIVE_ROUTES_FOR_DATE_CACHE[cache_key] = set()
+            return set()
+
+        conn.execute(
+            "CREATE TEMP TABLE IF NOT EXISTS _tmp_active_services (service_id TEXT PRIMARY KEY)"
+        )
+        conn.execute("DELETE FROM _tmp_active_services")
+        conn.executemany(
+            "INSERT OR IGNORE INTO _tmp_active_services VALUES (?)",
+            [(s,) for s in all_services],
+        )
+
+        rows = conn.execute(
+            """
+            SELECT DISTINCT t.route_id
+            FROM trips t
+            JOIN _tmp_active_services s ON t.service_id = s.service_id
+        """
+        ).fetchall()
+
+        active_routes = {r[0] for r in rows}
+        _ACTIVE_ROUTES_FOR_DATE_CACHE[cache_key] = active_routes
+        return active_routes
 
 
 # ── Translation helpers ────────────────────────────────────────────────────────
@@ -3126,10 +3374,23 @@ def all_routes(
         default=None,
         description="Filter routes by GTFS route_type integer (e.g. 1 for metro/subway, 3 for bus, 2 for rail).",
     ),
+    running_today: bool = Query(
+        default=True,
+        description="Only list routes that have scheduled trips for today (default True). "
+                    "Set to false to include unscheduled/dormant routes.",
+    ),
+    runningToday: Optional[bool] = Query(default=None, description="Alias for running_today (camelCase)"),
+    scheduled_today: Optional[bool] = Query(default=None, description="Alias for running_today"),
+    scheduledToday: Optional[bool] = Query(default=None, description="Alias for running_today (camelCase)"),
+    on_date: Optional[str] = Query(
+        default=None,
+        description="Optional date (YYYY-MM-DD) to check scheduled routes for; defaults to today.",
+    ),
 ):
     """
     Return paginated routes, optionally filtered by a search term.
 
+    - ``running_today`` – default True: only routes with scheduled trips for today are shown
     - ``q``      – substring match against route_short_name, route_long_name, or any headsign
     - ``offset`` – how many records to skip (for pagination)
     - ``limit``  – page size (1–500, default 50)
@@ -3146,6 +3407,19 @@ def all_routes(
 
     Response includes ``total`` (matching count) for the client to render pages.
     """
+    should_filter_running = running_today
+    for alias_val in (runningToday, scheduled_today, scheduledToday):
+        if alias_val is not None:
+            should_filter_running = alias_val
+            break
+
+    target_date = date.today()
+    if on_date and str(on_date).strip():
+        try:
+            target_date = datetime.strptime(str(on_date).strip(), "%Y-%m-%d").date()
+        except ValueError:
+            pass
+
     params: list = []
     where_clauses: list[str] = []
 
@@ -3200,137 +3474,265 @@ def all_routes(
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
     selected_region = regionId or region_id or region
-    with _db_or_region(region=selected_region, mode=mode) as conn:
-        total = conn.execute(
-            f"SELECT COUNT(*) FROM routes r {where_sql}", params
-        ).fetchone()[0]
+    if selected_region and str(selected_region).strip():
+        db_path, _ = _resolve_region_db(str(selected_region).strip())
+    else:
+        db_path = DB_PATHS.get(mode) or DB_PATH
 
-        routes_rows = conn.execute(
-            f"""
-            SELECT r.route_id, r.route_short_name, r.route_long_name,
-                   r.route_color, r.route_text_color, r.route_type, r.route_url,
-                   r.agency_id
-            FROM routes r
-            {where_sql}
-            ORDER BY r.route_short_name
-            LIMIT ? OFFSET ?
-            """,
-            params + [limit, offset],
-        ).fetchall()
+    with _open_db(db_path) as conn:
+        can_cache_routes = not (q and q.strip())
+        cache_key = (
+            str(db_path.resolve()),
+            target_date.isoformat(),
+            agency_id or "",
+            selected_transit_mode or "",
+            route_type,
+            should_filter_running,
+        )
 
+        filtered_routes = None
+        if can_cache_routes and cache_key in _ACTIVE_ROUTE_ROWS_CACHE:
+            filtered_routes = _ACTIVE_ROUTE_ROWS_CACHE[cache_key]
+
+        if filtered_routes is None:
+            if should_filter_running:
+                active_route_ids = _get_active_routes_for_date(conn, db_path, target_date)
+                if not active_route_ids:
+                    filtered_routes = []
+                else:
+                    all_matching_routes = conn.execute(
+                        f"""
+                        SELECT r.route_id, r.route_short_name, r.route_long_name,
+                               r.route_color, r.route_text_color, r.route_type, r.route_url,
+                               r.agency_id
+                        FROM routes r
+                        {where_sql}
+                        ORDER BY r.route_short_name
+                        """,
+                        params,
+                    ).fetchall()
+                    # Convert to lightweight dicts so they are safe to cache and serialize
+                    filtered_routes = [
+                        dict(r) for r in all_matching_routes if r["route_id"] in active_route_ids
+                    ]
+            else:
+                all_matching_routes = conn.execute(
+                    f"""
+                    SELECT r.route_id, r.route_short_name, r.route_long_name,
+                           r.route_color, r.route_text_color, r.route_type, r.route_url,
+                           r.agency_id
+                    FROM routes r
+                    {where_sql}
+                    ORDER BY r.route_short_name
+                    """,
+                    params,
+                ).fetchall()
+                filtered_routes = [dict(r) for r in all_matching_routes]
+
+            if can_cache_routes:
+                with _ACTIVE_ROUTE_ROWS_LOCK:
+                    _ACTIVE_ROUTE_ROWS_CACHE[cache_key] = filtered_routes
+
+        total = len(filtered_routes)
+        routes_rows = filtered_routes[offset : offset + limit]
+        if not routes_rows:
+            return {
+                "total": total,
+                "offset": offset,
+                "limit": limit,
+                "routes": [],
+            }
+
+        db_key = str(db_path.resolve())
+        date_key = target_date.isoformat()
         route_ids = [r["route_id"] for r in routes_rows]
         headsigns_map = {}
         stats_map: dict = {}
         if route_ids:
-            placeholders = ",".join("?" for _ in route_ids)
-            trip_rows = conn.execute(
-                f"""
-                SELECT route_id, trip_id, trip_headsign
-                FROM trips
-                WHERE route_id IN ({placeholders})
-                GROUP BY route_id, trip_headsign
-                """,
-                route_ids
-            ).fetchall()
+            missing_meta = [rid for rid in route_ids if (db_key, rid) not in _ROUTE_STATIC_META_CACHE]
+            if missing_meta:
+                placeholders = ",".join("?" for _ in missing_meta)
+                trip_tr = _get_trip_translations(conn, lang or "en")
+                stop_tr = _get_stop_translations(conn, lang or "en")
 
-            trip_tr = _get_trip_translations(conn, lang or "en")
-
-            for tr in trip_rows:
-                rid = tr["route_id"]
-                tid = tr["trip_id"]
-                hs = tr["trip_headsign"]
+                # 1. Headsigns
+                m_headsigns: dict[str, list[str]] = {}
                 if trip_tr:
-                    hs = trip_tr.get(tid, hs)
-                if hs:
-                    headsigns_map.setdefault(rid, []).append(hs)
+                    trip_rows = conn.execute(
+                        f"""
+                        SELECT route_id, trip_id, trip_headsign
+                        FROM trips
+                        WHERE route_id IN ({placeholders})
+                        GROUP BY route_id, trip_headsign
+                        """,
+                        missing_meta,
+                    ).fetchall()
+                    for tr in trip_rows:
+                        hs = trip_tr.get(tr["trip_id"], tr["trip_headsign"])
+                        if hs:
+                            m_headsigns.setdefault(tr["route_id"], []).append(hs)
+                else:
+                    hs_rows = conn.execute(
+                        f"""
+                        SELECT DISTINCT route_id, trip_headsign
+                        FROM trips
+                        WHERE route_id IN ({placeholders})
+                          AND trip_headsign IS NOT NULL
+                          AND trip_headsign != ''
+                        """,
+                        missing_meta,
+                    ).fetchall()
+                    for tr in hs_rows:
+                        m_headsigns.setdefault(tr["route_id"], []).append(tr["trip_headsign"])
 
-            stop_tr = _get_stop_translations(conn, lang or "en")
+                # 2. Distinct stops per route (using pre-indexed stop_routes table)
+                has_stop_routes = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='stop_routes'"
+                ).fetchone() is not None
+                if has_stop_routes:
+                    m_stop_counts: dict[str, int] = dict(
+                        conn.execute(
+                            f"""
+                            SELECT route_id, COUNT(DISTINCT stop_id)
+                            FROM stop_routes
+                            WHERE route_id IN ({placeholders})
+                            GROUP BY route_id
+                            """,
+                            missing_meta,
+                        ).fetchall()
+                    )
+                else:
+                    m_stop_counts = dict(
+                        conn.execute(
+                            f"""
+                            SELECT t.route_id, COUNT(DISTINCT st.stop_id)
+                            FROM trips t
+                            JOIN stop_times st ON st.trip_id = t.trip_id
+                            WHERE t.route_id IN ({placeholders})
+                            GROUP BY t.route_id
+                            """,
+                            missing_meta,
+                        ).fetchall()
+                    )
 
-            # Per-route counts in batched queries (eliminates correlated subquery table scans):
-            #   stop_count  – distinct stops served by the route
-            #   trip_count  – trips in the feed
-            #   trips_today – trips active today (calendar + calendar_dates)
-            today = date.today()
-            active = sorted(_active_services(conn, today))
-
-            # 1. Total trips per route (fast indexed GROUP BY)
-            trip_counts: dict[str, int] = dict(
-                conn.execute(
-                    f"SELECT route_id, COUNT(*) FROM trips WHERE route_id IN ({placeholders}) GROUP BY route_id",
-                    route_ids,
-                ).fetchall()
-            )
-
-            # 2. Distinct stops per route (batched GROUP BY across all trips of route)
-            stop_counts: dict[str, int] = dict(
-                conn.execute(
+                # 3. Trip summary
+                m_trip_summary = conn.execute(
                     f"""
-                    SELECT t.route_id, COUNT(DISTINCT st.stop_id)
-                    FROM trips t
-                    JOIN stop_times st ON st.trip_id = t.trip_id
-                    WHERE t.route_id IN ({placeholders})
-                    GROUP BY t.route_id
-                    """,
-                    route_ids,
-                ).fetchall()
-            )
-
-            # 3. Terminal stops (start_stop_name and end_stop_name from first trip of each route)
-            first_trips: dict[str, str] = dict(
-                conn.execute(
-                    f"SELECT route_id, MIN(trip_id) FROM trips WHERE route_id IN ({placeholders}) GROUP BY route_id",
-                    route_ids,
-                ).fetchall()
-            )
-            first_trip_ids = list(first_trips.values())
-            terminals: dict[str, list[Optional[str]]] = {}
-            if first_trip_ids:
-                ph_first = ",".join("?" for _ in first_trip_ids)
-                first_trip_stops = conn.execute(
-                    f"""
-                    SELECT t.route_id, st.trip_id, st.stop_id, s.stop_name, CAST(st.stop_sequence AS INTEGER) as seq
-                    FROM stop_times st
-                    JOIN trips t ON t.trip_id = st.trip_id
-                    JOIN stops s ON s.stop_id = st.stop_id
-                    WHERE st.trip_id IN ({ph_first})
-                    ORDER BY t.route_id, st.trip_id, seq
-                    """,
-                    first_trip_ids,
-                ).fetchall()
-                for r in first_trip_stops:
-                    rid = r["route_id"]
-                    sname = r["stop_name"]
-                    sid = r["stop_id"]
-                    if stop_tr:
-                        sname = stop_tr.get(sid, sname)
-                    if rid not in terminals:
-                        terminals[rid] = [sname, sname]
-                    else:
-                        terminals[rid][1] = sname
-
-            today_counts: dict = {}
-            if active:
-                ph_active = ",".join("?" * len(active))
-                for row in conn.execute(
-                    f"""
-                    SELECT route_id, COUNT(*) AS n
+                    SELECT route_id, COUNT(*) AS trip_count, MIN(trip_id) AS first_trip_id
                     FROM trips
                     WHERE route_id IN ({placeholders})
-                      AND service_id IN ({ph_active})
                     GROUP BY route_id
                     """,
-                    [*route_ids, *active],
-                ).fetchall():
-                    today_counts[row["route_id"]] = row["n"]
+                    missing_meta,
+                ).fetchall()
+                m_trip_counts: dict[str, int] = {r["route_id"]: r["trip_count"] for r in m_trip_summary}
+                m_first_trips: dict[str, str] = {r["route_id"]: r["first_trip_id"] for r in m_trip_summary if r["first_trip_id"]}
 
+                # 4. Terminal stops
+                m_first_trip_ids = list(m_first_trips.values())
+                m_trip_to_route = {tid: rid for rid, tid in m_first_trips.items()}
+                m_terminals: dict[str, list[Optional[str]]] = {}
+                if m_first_trip_ids:
+                    ph_first = ",".join("?" for _ in m_first_trip_ids)
+                    first_trip_stops = conn.execute(
+                        f"""
+                        SELECT trip_id, stop_id, CAST(stop_sequence AS INTEGER) AS seq
+                        FROM stop_times
+                        WHERE trip_id IN ({ph_first})
+                        ORDER BY trip_id, seq
+                        """,
+                        m_first_trip_ids,
+                    ).fetchall()
+                    trip_term_sids: dict[str, list[str]] = {}
+                    term_sids: set[str] = set()
+                    for r in first_trip_stops:
+                        tid = r["trip_id"]
+                        sid = r["stop_id"]
+                        term_sids.add(sid)
+                        if tid not in trip_term_sids:
+                            trip_term_sids[tid] = [sid, sid]
+                        else:
+                            trip_term_sids[tid][1] = sid
+
+                    if term_sids:
+                        ph_sids = ",".join("?" for _ in term_sids)
+                        stop_name_rows = conn.execute(
+                            f"SELECT stop_id, stop_name FROM stops WHERE stop_id IN ({ph_sids})",
+                            list(term_sids),
+                        ).fetchall()
+                        stop_name_map = {r["stop_id"]: r["stop_name"] for r in stop_name_rows}
+                    else:
+                        stop_name_map = {}
+
+                    for tid, (s_sid, e_sid) in trip_term_sids.items():
+                        rid = m_trip_to_route.get(tid)
+                        if rid:
+                            s_start = stop_tr.get(s_sid, stop_name_map.get(s_sid)) if stop_tr else stop_name_map.get(s_sid)
+                            s_end = stop_tr.get(e_sid, stop_name_map.get(e_sid)) if stop_tr else stop_name_map.get(e_sid)
+                            m_terminals[rid] = [s_start, s_end]
+
+                with _ROUTE_STATIC_META_LOCK:
+                    for rid in missing_meta:
+                        term = m_terminals.get(rid, [None, None])
+                        _ROUTE_STATIC_META_CACHE[(db_key, rid)] = {
+                            "stop_count": m_stop_counts.get(rid, 0),
+                            "trip_count": m_trip_counts.get(rid, 0),
+                            "start_stop_name": term[0],
+                            "end_stop_name": term[1],
+                            "headsigns": m_headsigns.get(rid, []),
+                        }
+
+            # 5. Trips today
+            missing_today = [rid for rid in route_ids if (db_key, date_key, rid) not in _ROUTE_TRIPS_TODAY_CACHE]
+            if missing_today:
+                today = date.today()
+                active = sorted(_active_services(conn, today))
+                m_today_counts: dict[str, int] = {}
+                if active:
+                    ph_m = ",".join("?" for _ in missing_today)
+                    has_tmp = conn.execute(
+                        "SELECT 1 FROM sqlite_temp_master WHERE type='table' AND name='_tmp_active_services'"
+                    ).fetchone() is not None
+                    if has_tmp:
+                        for row in conn.execute(
+                            f"""
+                            SELECT t.route_id, COUNT(*) AS n
+                            FROM trips t
+                            JOIN _tmp_active_services s ON t.service_id = s.service_id
+                            WHERE t.route_id IN ({ph_m})
+                            GROUP BY t.route_id
+                            """,
+                            missing_today,
+                        ).fetchall():
+                            m_today_counts[row["route_id"]] = row["n"]
+                    else:
+                        ph_active = ",".join("?" * len(active))
+                        for row in conn.execute(
+                            f"""
+                            SELECT route_id, COUNT(*) AS n
+                            FROM trips
+                            WHERE route_id IN ({ph_m})
+                              AND service_id IN ({ph_active})
+                            GROUP BY route_id
+                            """,
+                            [*missing_today, *active],
+                        ).fetchall():
+                            m_today_counts[row["route_id"]] = row["n"]
+
+                with _ROUTE_TRIPS_TODAY_LOCK:
+                    for rid in missing_today:
+                        _ROUTE_TRIPS_TODAY_CACHE[(db_key, date_key, rid)] = m_today_counts.get(rid, 0)
+
+            # Assemble maps from cache in sub-millisecond
             for rid in route_ids:
-                term = terminals.get(rid, [None, None])
+                meta = _ROUTE_STATIC_META_CACHE.get((db_key, rid), {})
+                headsigns_map[rid] = meta.get("headsigns", [])
                 stats_map[rid] = {
-                    "stop_count":      stop_counts.get(rid, 0),
-                    "trip_count":      trip_counts.get(rid, 0),
-                    "trips_today":     today_counts.get(rid, 0),
-                    "start_stop_name": term[0],
-                    "end_stop_name":   term[1],
+                    "stop_count":      meta.get("stop_count", 0),
+                    "trip_count":      meta.get("trip_count", 0),
+                    "trips_today":     _ROUTE_TRIPS_TODAY_CACHE.get((db_key, date_key, rid), 0),
+                    "start_stop_name": meta.get("start_stop_name"),
+                    "end_stop_name":   meta.get("end_stop_name"),
                 }
 
         between_map: dict = {}
@@ -3407,8 +3809,21 @@ def stop_routes(
                     "(water) or 'rail'. All are served by this one API; the "
                     "endpoint paths are identical.",
     ),
+    running_today: bool = Query(
+        default=True,
+        description="Only list routes that have scheduled trips for today (default True). "
+                    "Set to false to include unscheduled routes.",
+    ),
+    runningToday: Optional[bool] = Query(default=None, description="Alias for running_today (camelCase)"),
+    scheduled_today: Optional[bool] = Query(default=None, description="Alias for running_today"),
 ):
     """All distinct routes that serve *stop_id*."""
+    should_filter_running = running_today
+    for alias_val in (runningToday, scheduled_today):
+        if alias_val is not None:
+            should_filter_running = alias_val
+            break
+
     lang = str(lang).strip() if (lang and not hasattr(lang, "default")) else None
     db_path = _find_db_for_stop(stop_id, region=region, region_id=region_id, regionId=regionId, mode=mode)
     with _open_db(db_path) as conn:
@@ -3424,27 +3839,67 @@ def stop_routes(
         stop_ids = _station_stop_ids(conn, stop_id)
         stop_ph = ",".join("?" * len(stop_ids))
 
-        rows = conn.execute(
-            f"""
-            SELECT
-                r.route_id,
-                r.route_short_name,
-                r.route_long_name,
-                r.route_color,
-                r.route_text_color,
-                r.route_type,
-                r.route_url,
-                t.trip_id,
-                t.trip_headsign
-            FROM  stop_times st
-            JOIN  trips      t  ON st.trip_id  = t.trip_id
-            JOIN  routes     r  ON t.route_id  = r.route_id
-            WHERE st.stop_id IN ({stop_ph})
-            GROUP BY r.route_id, t.trip_headsign
-            ORDER BY r.route_short_name
-            """,
-            stop_ids,
-        ).fetchall()
+        if should_filter_running:
+            active_route_ids = _get_active_routes_for_date(conn, db_path, date.today())
+            if not active_route_ids:
+                stop_name = row["stop_name"]
+                stop_tr = _get_stop_translations(conn, lang or "en")
+                if stop_tr:
+                    stop_name = stop_tr.get(stop_id, stop_name)
+                return {
+                    "stop_id": row["stop_id"],
+                    "stop_name": stop_name,
+                    "routes": [],
+                }
+
+        has_stop_routes = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='stop_routes'"
+        ).fetchone() is not None
+        if has_stop_routes:
+            raw_rows = conn.execute(
+                f"""
+                SELECT
+                    r.route_id,
+                    r.route_short_name,
+                    r.route_long_name,
+                    r.route_color,
+                    r.route_text_color,
+                    r.route_type,
+                    r.route_url,
+                    sr.headsign AS trip_headsign
+                FROM stop_routes sr
+                JOIN routes r ON sr.route_id = r.route_id
+                WHERE sr.stop_id IN ({stop_ph})
+                ORDER BY r.route_short_name
+                """,
+                stop_ids,
+            ).fetchall()
+        else:
+            raw_rows = conn.execute(
+                f"""
+                SELECT
+                    r.route_id,
+                    r.route_short_name,
+                    r.route_long_name,
+                    r.route_color,
+                    r.route_text_color,
+                    r.route_type,
+                    r.route_url,
+                    t.trip_headsign
+                FROM  stop_times st
+                JOIN  trips      t  ON st.trip_id  = t.trip_id
+                JOIN  routes     r  ON t.route_id  = r.route_id
+                WHERE st.stop_id IN ({stop_ph})
+                GROUP BY r.route_id, t.trip_headsign
+                ORDER BY r.route_short_name
+                """,
+                stop_ids,
+            ).fetchall()
+
+        if should_filter_running:
+            rows = [r for r in raw_rows if r["route_id"] in active_route_ids]
+        else:
+            rows = raw_rows
 
         stop_tr = _get_stop_translations(conn, lang or "en")
         trip_tr = _get_trip_translations(conn, lang or "en")
@@ -5091,16 +5546,30 @@ def stop_detail(
                     d["lon"] = None
                 break
 
-        routes_rows = conn.execute(
-            """
-            SELECT DISTINCT r.route_id, r.route_short_name, r.route_long_name, r.route_type, r.route_color
-            FROM routes r
-            JOIN trips t ON t.route_id = r.route_id
-            JOIN stop_times st ON st.trip_id = t.trip_id
-            WHERE st.stop_id = ?
-            """,
-            (stop_id,),
-        ).fetchall()
+        has_stop_routes = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='stop_routes'"
+        ).fetchone() is not None
+        if has_stop_routes:
+            routes_rows = conn.execute(
+                """
+                SELECT DISTINCT r.route_id, r.route_short_name, r.route_long_name, r.route_type, r.route_color
+                FROM stop_routes sr
+                JOIN routes r ON r.route_id = sr.route_id
+                WHERE sr.stop_id = ?
+                """,
+                (stop_id,),
+            ).fetchall()
+        else:
+            routes_rows = conn.execute(
+                """
+                SELECT DISTINCT r.route_id, r.route_short_name, r.route_long_name, r.route_type, r.route_color
+                FROM routes r
+                JOIN trips t ON t.route_id = r.route_id
+                JOIN stop_times st ON st.trip_id = t.trip_id
+                WHERE st.stop_id = ?
+                """,
+                (stop_id,),
+            ).fetchall()
 
         routes = [
             {

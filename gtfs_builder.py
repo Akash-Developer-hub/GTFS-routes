@@ -78,6 +78,7 @@ if sys.platform == "win32":
             except Exception:
                 pass
 import sqlite3
+import time
 import zipfile
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -1145,8 +1146,19 @@ def create_id_indexes(conn: sqlite3.Connection) -> None:
         """
     ).fetchall()
 
+    # Single-column ID indexes on smaller/lookup tables.
+    # We skip massive tables (stop_times, shapes, trips) here because they are
+    # completely covered by the multi-column composite/covering indexes below,
+    # avoiding redundant multi-gigabyte table sorts.
+    huge_tables_covered = {"stop_times", "shapes", "trips"}
+    existing_indexes = {
+        r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()
+    }
+
     created = 0
     for (table_name,) in tables:
+        if table_name in huge_tables_covered:
+            continue
         cols = conn.execute(f'PRAGMA table_info("{table_name}")').fetchall()
         for _, col_name, _, _, _, pk in cols:
             if pk:
@@ -1155,29 +1167,155 @@ def create_id_indexes(conn: sqlite3.Connection) -> None:
                 continue
 
             idx_name = f"idx_{table_name}_{col_name}"
+            if idx_name in existing_indexes:
+                continue
             conn.execute(
                 f'CREATE INDEX IF NOT EXISTS "{idx_name}" '
                 f'ON "{table_name}" ("{col_name}")'
             )
+            existing_indexes.add(idx_name)
             created += 1
 
-    # Composite indexes for the API's hottest queries: route+service lookups
-    # (schedules) and per-trip stop ordering (first/last stop of a trip).
+    # Essential, lean composite & covering indexes for the API's hottest queries.
+    # Non-redundant: B-tree left-prefix matching satisfies parent column lookups.
     composite = [
-        ("idx_trips_route_service", "trips", "route_id, service_id"),
-        ("idx_stop_times_trip_seq", "stop_times", "trip_id, stop_sequence"),
-    ]
-    for idx_name, table, cols in composite:
-        if conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
-        ).fetchone():
-            conn.execute(
-                f'CREATE INDEX IF NOT EXISTS "{idx_name}" ON "{table}" ({cols})'
-            )
-            created += 1
+        # stop_times: departure and arrival queries (next-departures, timetable, realtime delays)
+        ("idx_stop_times_stop_dep", "stop_times", ["stop_id", "departure_time", "trip_id"]),
+        ("idx_stop_times_trip_seq_dep", "stop_times", ["trip_id", "stop_sequence", "departure_time", "arrival_time", "stop_id"]),
+        ("idx_stop_times_stop_arr", "stop_times", ["stop_id", "arrival_time", "trip_id"]),
 
+        # trips: direction, service, headsigns, routes
+        ("idx_trips_route_dir_headsign", "trips", ["route_id", "direction_id", "trip_headsign", "trip_id"]),
+        ("idx_trips_route_service_trip", "trips", ["route_id", "service_id", "trip_id"]),
+        ("idx_trips_trip_route_hs", "trips", ["trip_id", "route_id", "trip_headsign"]),
+        ("idx_trips_route_shape_trip", "trips", ["route_id", "shape_id", "trip_id"]),
+        ("idx_trips_service_id", "trips", ["service_id", "trip_id"]),
+        ("idx_trips_block_id", "trips", ["block_id"]),
+
+        # shapes: covering index so full shape rendering avoids reading table pages
+        ("idx_shapes_covering", "shapes", ["shape_id", "shape_pt_sequence", "shape_pt_lon", "shape_pt_lat"]),
+
+        # stops: spatial bounding box, location type, code, parent station
+        ("idx_stops_lat_lon", "stops", ["stop_lat", "stop_lon"]),
+        ("idx_stops_loc_lat_lon", "stops", ["location_type", "stop_lat", "stop_lon"]),
+        ("idx_stops_parent_station", "stops", ["parent_station"]),
+        ("idx_stops_name", "stops", ["stop_name"]),
+        ("idx_stops_code", "stops", ["stop_code"]),
+
+        # routes: types, short/long name, agency
+        ("idx_routes_short_name", "routes", ["route_short_name"]),
+        ("idx_routes_long_name", "routes", ["route_long_name"]),
+        ("idx_routes_type_id", "routes", ["route_type", "route_id"]),
+        ("idx_routes_agency_id", "routes", ["agency_id", "route_id"]),
+
+        # calendar & calendar_dates: active service lookups
+        ("idx_calendar_dates", "calendar", ["start_date", "end_date", "service_id"]),
+        ("idx_calendar_dates_date_exc", "calendar_dates", ["date", "exception_type", "service_id"]),
+        ("idx_calendar_dates_service_date", "calendar_dates", ["service_id", "date", "exception_type"]),
+
+        # transfers
+        ("idx_transfers_from_to", "transfers", ["from_stop_id", "to_stop_id"]),
+        ("idx_transfers_to_from", "transfers", ["to_stop_id", "from_stop_id"]),
+
+        # frequencies
+        ("idx_frequencies_trip_start", "frequencies", ["trip_id", "start_time", "end_time"]),
+    ]
+    table_cols_cache: dict[str, set[str]] = {}
+    needed_composite = []
+    for idx_name, table, col_list in composite:
+        if idx_name in existing_indexes:
+            continue
+        if table not in table_cols_cache:
+            if not conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ).fetchone():
+                table_cols_cache[table] = set()
+            else:
+                table_cols_cache[table] = {
+                    r[1] for r in conn.execute(f'PRAGMA table_info("{table}")').fetchall()
+                }
+        avail = table_cols_cache[table]
+        if avail and all(c in avail for c in col_list):
+            needed_composite.append((idx_name, table, col_list))
+
+    total_needed = len(needed_composite)
+    for i, (idx_name, table, col_list) in enumerate(needed_composite, 1):
+        cols_sql = ", ".join(f'"{c}"' for c in col_list)
+        t0 = time.perf_counter()
+        log.info("  [%d/%d] Creating index %s on %s...", i, total_needed, idx_name, table)
+        conn.execute(
+            f'CREATE INDEX IF NOT EXISTS "{idx_name}" ON "{table}" ({cols_sql})'
+        )
+        existing_indexes.add(idx_name)
+        created += 1
+        log.info("  [%d/%d] Finished %s in %.1fs", i, total_needed, idx_name, time.perf_counter() - t0)
+
+    # Pre-computed stop_routes table for sub-millisecond route/stop discovery
+    table_names_set = {t[0] for t in tables}
+    if "stop_times" in table_names_set and "trips" in table_names_set:
+        has_stop_routes = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='stop_routes'"
+        ).fetchone() is not None
+        if not has_stop_routes:
+            t0 = time.perf_counter()
+            log.info("  Generating pre-indexed stop_routes table...")
+            conn.execute("""
+                CREATE TABLE stop_routes AS
+                SELECT DISTINCT st.stop_id AS stop_id, t.route_id AS route_id,
+                       COALESCE(t.trip_headsign, '') AS headsign
+                FROM stop_times st JOIN trips t ON t.trip_id = st.trip_id;
+            """)
+            log.info("  Generated stop_routes table in %.1fs", time.perf_counter() - t0)
+        for sr_idx, cols_def in [
+            ("idx_stop_routes_stop", "stop_id"),
+            ("idx_stop_routes_stop_route", "stop_id, route_id"),
+            ("idx_stop_routes_route_stop", "route_id, stop_id"),
+        ]:
+            if sr_idx not in existing_indexes:
+                conn.execute(f"CREATE INDEX IF NOT EXISTS {sr_idx} ON stop_routes({cols_def})")
+                existing_indexes.add(sr_idx)
+                created += 1
+
+    t0 = time.perf_counter()
+    log.info("  Running sampled query optimizer stats (ANALYZE)...")
+    try:
+        conn.execute("PRAGMA analysis_limit = 1000")
+        conn.execute("ANALYZE")
+        conn.execute("PRAGMA optimize")
+    except Exception:
+        pass
+    log.info("  Optimizer stats updated in %.1fs", time.perf_counter() - t0)
     conn.commit()
-    log.info("  Created/ensured %d ID indexes", created)
+    log.info("  Created/ensured %d ID & search indexes", created)
+
+
+def auto_index_database(db_path: Path) -> int:
+    """
+    Connect to *db_path*, create all ID indexes, composite & covering query indexes,
+    precompute stop_routes table, and run ANALYZE to ensure sub-10ms query times.
+    """
+    if not db_path.exists():
+        log.error("Database file does not exist: %s", db_path)
+        return 1
+    size_mb = db_path.stat().st_size / 1024 / 1024
+    log.info("Auto-indexing database: %s (%.1f MB)", db_path.name, size_mb)
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=OFF")       # Maximum write throughput during index builds
+    conn.execute("PRAGMA cache_size=-524288")     # 512 MB memory page cache
+    conn.execute("PRAGMA mmap_size=4294967296")   # 4 GB memory-mapped I/O
+    conn.execute("PRAGMA temp_store=MEMORY")
+    try:
+        conn.execute("PRAGMA threads=8")          # Multi-threaded parallel sorting
+    except Exception:
+        pass
+    try:
+        create_id_indexes(conn)
+        conn.execute("PRAGMA synchronous=NORMAL") # Restore safe synchronous mode for querying
+        log.info("Auto-indexing complete for %s (response times optimized for <10ms)", db_path.name)
+        return 0
+    finally:
+        conn.close()
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -1335,7 +1473,18 @@ def main() -> int:
         "--skip-validation", action="store_true",
         help="Skip validation entirely (not recommended)"
     )
+    parser.add_argument(
+        "--auto-index", nargs="*", default=None, metavar="DB",
+        help="Auto-index one or more existing SQLite databases to bring response times under 10ms. "
+             "If passed without paths, auto-indexes all target DBs defined in .env."
+    )
     args = parser.parse_args()
+
+    if args.auto_index is not None:
+        db_paths = [_resolve(p) for p in args.auto_index] if args.auto_index else [t.db_path for t in cfg.targets]
+        for p in db_paths:
+            auto_index_database(p)
+        return 0
 
     if (args.gtfs or args.db or args.feeds) and args.only == "all":
         args.only = "transit"
