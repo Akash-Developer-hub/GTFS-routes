@@ -36,6 +36,11 @@ class CacheStore(ABC):
     """Abstract interface for storing and querying GTFS-Realtime snapshots."""
 
     @abstractmethod
+    async def get_feed_names(self) -> List[str]:
+        """Return all tracked feed names."""
+        pass
+
+    @abstractmethod
     async def update_snapshot(
         self,
         feed_name: str,
@@ -103,16 +108,9 @@ class MemoryCacheStore(CacheStore):
     def __init__(self):
         self._lock = asyncio.Lock()
         # feed_name -> {entity_id: entity_dict}
-        self._feeds: Dict[str, Dict[str, Dict[str, Any]]] = {
-            "trip_updates": {},
-            "train_updates": {},
-            "vehicle_positions": {},
-            "alerts": {},
-        }
+        self._feeds: Dict[str, Dict[str, Dict[str, Any]]] = {}
         # feed_name -> FeedMetadata
-        self._metadata: Dict[str, FeedMetadata] = {
-            k: FeedMetadata(feed_type=k) for k in self._feeds
-        }
+        self._metadata: Dict[str, FeedMetadata] = {}
 
         # Secondary indices
         # route_id -> set of (feed_name, entity_id)
@@ -221,6 +219,11 @@ class MemoryCacheStore(CacheStore):
             self._metadata[feed_name] = metadata
             self._rebuild_indices_locked()
 
+    async def get_feed_names(self) -> List[str]:
+        async with self._lock:
+            names = set(self._metadata.keys()) | set(self._feeds.keys())
+            return sorted(names)
+
     async def get_metadata(self, feed_name: str) -> FeedMetadata:
         async with self._lock:
             return self._get_metadata_locked(feed_name)
@@ -248,11 +251,11 @@ class MemoryCacheStore(CacheStore):
                 item = self._feeds.get(feed_name, {}).get(eid)
                 if not item:
                     continue
-                if feed_name in ("trip_updates", "train_updates"):
+                if feed_name in ("trip_updates", "train_updates") or "trip" in feed_name or "train" in feed_name or "update" in feed_name:
                     res.trip_updates.append(TripUpdate(**item))
-                elif feed_name == "vehicle_positions":
+                elif feed_name == "vehicle_positions" or "vehicle" in feed_name:
                     res.vehicles.append(VehiclePosition(**item))
-                elif feed_name == "alerts":
+                elif feed_name == "alerts" or "alert" in feed_name:
                     res.alerts.append(Alert(**item))
         return res
 
@@ -265,9 +268,9 @@ class MemoryCacheStore(CacheStore):
                 item = self._feeds.get(feed_name, {}).get(eid)
                 if not item:
                     continue
-                if feed_name in ("trip_updates", "train_updates") and not res.trip_update:
+                if (feed_name in ("trip_updates", "train_updates") or "trip" in feed_name or "train" in feed_name or "update" in feed_name) and not res.trip_update:
                     res.trip_update = TripUpdate(**item)
-                elif feed_name == "vehicle_positions" and not res.vehicle:
+                elif (feed_name == "vehicle_positions" or "vehicle" in feed_name) and not res.vehicle:
                     res.vehicle = VehiclePosition(**item)
         return res
 
@@ -280,19 +283,19 @@ class MemoryCacheStore(CacheStore):
                 item = self._feeds.get(feed_name, {}).get(eid)
                 if not item:
                     continue
-                if feed_name in ("trip_updates", "train_updates"):
+                if feed_name in ("trip_updates", "train_updates") or "trip" in feed_name or "train" in feed_name or "update" in feed_name:
                     for stu in item.get("stop_time_updates", []):
                         if str(stu.get("stop_id")) == sid:
                             res.upcoming_updates.append({
                                 "trip_id": item.get("trip_id"),
                                 "route_id": item.get("route_id"),
-                                "feed_source": feed_name,
+                                "feed_source": feed_source if (feed_source := item.get("feed_source")) else feed_name,
                                 "stop_sequence": stu.get("stop_sequence"),
                                 "arrival": stu.get("arrival"),
                                 "departure": stu.get("departure"),
                                 "schedule_relationship": stu.get("schedule_relationship"),
                             })
-                elif feed_name == "alerts":
+                elif feed_name == "alerts" or "alert" in feed_name:
                     res.alerts.append(Alert(**item))
         return res
 
@@ -391,7 +394,15 @@ class RedisCacheStore(CacheStore):
                     if ie.get("stop_id"):
                         pipe.sadd(f"{self._prefix}idx:stop:{ie['stop_id']}", ref)
 
+                pipe.sadd(f"{self._prefix}known_feeds", feed_name)
+
             await pipe.execute()
+
+    async def get_feed_names(self) -> List[str]:
+        raw_names = await self._r.smembers(f"{self._prefix}known_feeds")
+        if raw_names:
+            return sorted([n.decode() if isinstance(n, bytes) else str(n) for n in raw_names])
+        return ["trip_updates", "train_updates", "vehicle_positions", "alerts"]
 
     async def get_metadata(self, feed_name: str) -> FeedMetadata:
         raw = await self._r.get(f"{self._prefix}{feed_name}:meta")
@@ -438,11 +449,11 @@ class RedisCacheStore(CacheStore):
         res = RouteRealtime(route_id=rid)
         refs = await self._r.smembers(f"{self._prefix}idx:route:{rid}")
         for feed_name, item in await self._resolve_refs(refs):
-            if feed_name in ("trip_updates", "train_updates"):
+            if feed_name in ("trip_updates", "train_updates") or "trip" in feed_name or "train" in feed_name or "update" in feed_name:
                 res.trip_updates.append(TripUpdate(**item))
-            elif feed_name == "vehicle_positions":
+            elif feed_name == "vehicle_positions" or "vehicle" in feed_name:
                 res.vehicles.append(VehiclePosition(**item))
-            elif feed_name == "alerts":
+            elif feed_name == "alerts" or "alert" in feed_name:
                 res.alerts.append(Alert(**item))
         return res
 
@@ -451,9 +462,9 @@ class RedisCacheStore(CacheStore):
         res = TripRealtime(trip_id=tid)
         refs = await self._r.smembers(f"{self._prefix}idx:trip:{tid}")
         for feed_name, item in await self._resolve_refs(refs):
-            if feed_name in ("trip_updates", "train_updates") and not res.trip_update:
+            if (feed_name in ("trip_updates", "train_updates") or "trip" in feed_name or "train" in feed_name or "update" in feed_name) and not res.trip_update:
                 res.trip_update = TripUpdate(**item)
-            elif feed_name == "vehicle_positions" and not res.vehicle:
+            elif (feed_name == "vehicle_positions" or "vehicle" in feed_name) and not res.vehicle:
                 res.vehicle = VehiclePosition(**item)
         return res
 
@@ -462,7 +473,7 @@ class RedisCacheStore(CacheStore):
         res = StopRealtime(stop_id=sid)
         refs = await self._r.smembers(f"{self._prefix}idx:stop:{sid}")
         for feed_name, item in await self._resolve_refs(refs):
-            if feed_name in ("trip_updates", "train_updates"):
+            if feed_name in ("trip_updates", "train_updates") or "trip" in feed_name or "train" in feed_name or "update" in feed_name:
                 for stu in item.get("stop_time_updates", []):
                     if str(stu.get("stop_id")) == sid:
                         res.upcoming_updates.append({
@@ -474,7 +485,7 @@ class RedisCacheStore(CacheStore):
                             "departure": stu.get("departure"),
                             "schedule_relationship": stu.get("schedule_relationship"),
                         })
-            elif feed_name == "alerts":
+            elif feed_name == "alerts" or "alert" in feed_name:
                 res.alerts.append(Alert(**item))
         return res
 

@@ -1,0 +1,67 @@
+[
+  {
+    "name": "norway_national_trip_updates",
+    "feed_type": "trip_updates",
+    "url": "https://api.entur.io/realtime/v1/gtfs-rt/trip-updates",
+    "interval": 30,
+    "stale_threshold": 90,
+    "headers": {
+      "ET-Client-Name": "zeus-gtfsroutes"
+    },
+    "enabled": true
+  },
+  {
+    "name": "norway_national_vehicle_positions",
+    "feed_type": "vehicle_positions",
+    "url": "https://api.entur.io/realtime/v1/gtfs-rt/vehicle-positions",
+    "interval": 30,
+    "stale_threshold": 90,
+    "headers": {
+      "ET-Client-Name": "zeus-gtfsroutes"
+    },
+    "enabled": true
+  },
+  {
+    "name": "norway_national_alerts",
+    "feed_type": "alerts",
+    "url": "https://api.entur.io/realtime/v1/gtfs-rt/alerts",
+    "interval": 60,
+    "stale_threshold": 180,
+    "headers": {
+      "ET-Client-Name": "zeus-gtfsroutes"
+    },
+    "enabled": true
+  },
+  {
+    "name": "netherlands_trip_updates",
+    "feed_type": "trip_updates",
+    "url": "https://gtfs.ovapi.nl/nl/tripUpdates.pb",
+    "interval": 30,
+    "stale_threshold": 90,
+    "enabled": true
+  },
+  {
+    "name": "netherlands_train_updates",
+    "feed_type": "trip_updates",
+    "url": "https://gtfs.ovapi.nl/nl/trainUpdates.pb",
+    "interval": 30,
+    "stale_threshold": 90,
+    "enabled": true
+  },
+  {
+    "name": "netherlands_vehicle_positions",
+    "feed_type": "vehicle_positions",
+    "url": "https://gtfs.ovapi.nl/nl/vehiclePositions.pb",
+    "interval": 30,
+    "stale_threshold": 90,
+    "enabled": true
+  },
+  {
+    "name": "netherlands_alerts",
+    "feed_type": "alerts",
+    "url": "https://gtfs.ovapi.nl/nl/alerts.pb",
+    "interval": 60,
+    "stale_threshold": 180,
+    "enabled": true
+  }
+]

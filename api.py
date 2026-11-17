@@ -190,7 +190,56 @@ app.add_middleware(
 
 STATIC_DIR = Path(__file__).parent / "static"
 STATIC_DIR.mkdir(exist_ok=True)
+FLAGS_DIR = STATIC_DIR / "flags"
+FLAGS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+def _find_region_image(db_path: Path, reg_id: str = "", name: str = "") -> tuple[Optional[str], Optional[str]]:
+    """
+    Search for a region flag or image file corresponding to this database.
+    Checks in:
+      1. static/flags/<slug>.<ext>
+      2. static/images/<slug>.<ext>
+      3. static/regions/<slug>.<ext>
+      4. static/<slug>.<ext>
+    Where <slug> is derived from db filename, region id, or name.
+    Returns (relative_file_path, public_url) e.g.
+      ('static/flags/netherlands.svg', '/static/flags/netherlands.svg')
+    or (None, None) if no image is present.
+    """
+    clean_stem = db_path.stem.lower().replace("-gtfs", "")
+    slugs = [
+        clean_stem,
+        db_path.stem.lower(),
+        reg_id.lower() if reg_id else "",
+        name.lower().replace(" ", "_") if name else "",
+        name.lower().replace(" ", "-") if name else "",
+        name.lower().replace(" ", "") if name else "",
+    ]
+    unique_slugs = []
+    seen = set()
+    for s in slugs:
+        if s and s not in seen:
+            seen.add(s)
+            unique_slugs.append(s)
+
+    subdirs = ["flags", "images", "regions", ""]
+    extensions = [".svg", ".png", ".jpg", ".jpeg", ".webp", ".gif"]
+
+    for sub in subdirs:
+        folder = (STATIC_DIR / sub) if sub else STATIC_DIR
+        if not folder.is_dir():
+            continue
+        for slug in unique_slugs:
+            for ext in extensions:
+                candidate = folder / f"{slug}{ext}"
+                if candidate.is_file():
+                    rel_path = str(candidate.relative_to(Path(__file__).parent)).replace("\\", "/")
+                    url_path = f"/static/{sub}/{slug}{ext}" if sub else f"/static/{slug}{ext}"
+                    return rel_path, url_path
+
+    return None, None
 
 # Shared lang Query parameter – must be defined before any endpoint uses it.
 _LANG_QUERY = Query(
@@ -541,6 +590,9 @@ def _inspect_database(db_path: Path, force_refresh: bool = False) -> dict:
                     ).fetchone()
                     if row and row[0]:
                         info = json.loads(row[0])
+                        img_path, img_url = _find_region_image(db_path, reg_id=info.get("id", ""), name=info.get("name", ""))
+                        info["image_path"] = img_path
+                        info["image_url"] = img_url
                         _REGION_CACHE[cache_key] = info
                         return info
                 finally:
@@ -636,6 +688,7 @@ def _inspect_database(db_path: Path, force_refresh: bool = False) -> dict:
     elif timezone and "/" in timezone:
         region_name = timezone.split("/")[-1].replace("_", " ")
 
+    img_path, img_url = _find_region_image(db_path, reg_id=reg_id, name=name)
     info = {
         "id": reg_id,
         "name": name,
@@ -643,6 +696,8 @@ def _inspect_database(db_path: Path, force_refresh: bool = False) -> dict:
         "database": db_path.name,
         "transit_modes": transit_modes,
         "route_types": route_types,
+        "image_path": img_path,
+        "image_url": img_url,
         "database_path": resolved_str,
         "size_mb": round(stat.st_size / (1024 * 1024), 2),
         "size_bytes": stat.st_size,
@@ -1362,6 +1417,7 @@ def list_regions_simple():
             "name": r["name"],
             "database": r["database"],
             "transit_modes": r.get("transit_modes", []),
+            "image_url": r.get("image_url"),
         }
         for r in regions
     ]

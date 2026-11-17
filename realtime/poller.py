@@ -10,11 +10,13 @@ Fetches, validates, parses, normalizes and updates CacheStore with:
 """
 
 import asyncio
+import json
 import logging
 import os
 import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -25,64 +27,270 @@ from .models import FeedMetadata, HealthState
 
 log = logging.getLogger("gtfs_realtime.poller")
 
+BASE_DIR = Path(__file__).resolve().parent.parent
+
 
 class FeedConfig:
     def __init__(
         self,
         name: str,
-        env_url_key: str,
-        default_url: str,
-        env_interval_key: str,
-        default_interval: int,
-        env_stale_key: str,
-        default_stale: int,
+        env_url_key: Optional[str] = None,
+        default_url: str = "",
+        env_interval_key: Optional[str] = None,
+        default_interval: int = 30,
+        env_stale_key: Optional[str] = None,
+        default_stale: int = 90,
+        headers: Optional[Dict[str, str]] = None,
+        feed_type: Optional[str] = None,
     ):
         self.name = name
-        self.url = os.environ.get(env_url_key, default_url).strip() or default_url
-        self.interval = int(os.environ.get(env_interval_key, str(default_interval)).strip() or default_interval)
-        self.stale_threshold = int(os.environ.get(env_stale_key, str(default_stale)).strip() or default_stale)
+        self.url = (os.environ.get(env_url_key, default_url).strip() or default_url) if env_url_key else default_url
+        self.interval = (int(os.environ.get(env_interval_key, str(default_interval)).strip() or default_interval)) if env_interval_key else default_interval
+        self.stale_threshold = (int(os.environ.get(env_stale_key, str(default_stale)).strip() or default_stale)) if env_stale_key else default_stale
+        self.headers: Dict[str, str] = headers or {}
+        self.feed_type = feed_type or self._infer_feed_type(name, self.url)
         self.etag: Optional[str] = None
         self.last_modified: Optional[str] = None
 
+    @staticmethod
+    def _infer_feed_type(name: str, url: str) -> str:
+        s = f"{name} {url}".lower()
+        if "alert" in s:
+            return "alerts"
+        if "vehicle" in s or "position" in s:
+            return "vehicle_positions"
+        return "trip_updates"
 
-FEED_CONFIGS = [
-    FeedConfig(
-        name="trip_updates",
-        env_url_key="REALTIME_TRIP_UPDATES_URL",
-        default_url="https://gtfs.ovapi.nl/nl/tripUpdates.pb",
-        env_interval_key="REALTIME_POLL_INTERVAL_TRIP_UPDATES",
-        default_interval=30,
-        env_stale_key="REALTIME_STALE_THRESHOLD_UPDATES",
-        default_stale=90,
-    ),
-    FeedConfig(
-        name="train_updates",
-        env_url_key="REALTIME_TRAIN_UPDATES_URL",
-        default_url="https://gtfs.ovapi.nl/nl/trainUpdates.pb",
-        env_interval_key="REALTIME_POLL_INTERVAL_TRAIN_UPDATES",
-        default_interval=30,
-        env_stale_key="REALTIME_STALE_THRESHOLD_UPDATES",
-        default_stale=90,
-    ),
-    FeedConfig(
-        name="vehicle_positions",
-        env_url_key="REALTIME_VEHICLE_POSITIONS_URL",
-        default_url="https://gtfs.ovapi.nl/nl/vehiclePositions.pb",
-        env_interval_key="REALTIME_POLL_INTERVAL_VEHICLE_POSITIONS",
-        default_interval=30,
-        env_stale_key="REALTIME_STALE_THRESHOLD_UPDATES",
-        default_stale=90,
-    ),
-    FeedConfig(
-        name="alerts",
-        env_url_key="REALTIME_ALERTS_URL",
-        default_url="https://gtfs.ovapi.nl/nl/alerts.pb",
-        env_interval_key="REALTIME_POLL_INTERVAL_ALERTS",
-        default_interval=60,
-        env_stale_key="REALTIME_STALE_THRESHOLD_ALERTS",
-        default_stale=180,
-    ),
-]
+
+ENTUR_SUPPORTED_CODESPACES: Dict[str, Dict[str, bool]] = {
+    "AKT": {"trip_updates": True, "vehicle_positions": True, "alerts": True},
+    "ATB": {"trip_updates": True, "vehicle_positions": True, "alerts": True},
+    "AVI": {"trip_updates": False, "vehicle_positions": False, "alerts": False},
+    "BNR": {"trip_updates": False, "vehicle_positions": False, "alerts": False},
+    "BRA": {"trip_updates": True, "vehicle_positions": True, "alerts": True},
+    "FIN": {"trip_updates": True, "vehicle_positions": True, "alerts": True},
+    "FLT": {"trip_updates": True, "vehicle_positions": False, "alerts": False},
+    "GJB": {"trip_updates": False, "vehicle_positions": True, "alerts": False},
+    "GOA": {"trip_updates": False, "vehicle_positions": True, "alerts": True},
+    "INN": {"trip_updates": True, "vehicle_positions": True, "alerts": False},
+    "KOL": {"trip_updates": True, "vehicle_positions": True, "alerts": False},
+    "MOR": {"trip_updates": True, "vehicle_positions": True, "alerts": True},
+    "NBU": {"trip_updates": True, "vehicle_positions": True, "alerts": True},
+    "NOR": {"trip_updates": True, "vehicle_positions": False, "alerts": False},
+    "NSB": {"trip_updates": False, "vehicle_positions": True, "alerts": False},
+    "OST": {"trip_updates": True, "vehicle_positions": True, "alerts": True},
+    "RUT": {"trip_updates": True, "vehicle_positions": False, "alerts": True},
+    "SJN": {"trip_updates": False, "vehicle_positions": False, "alerts": False},
+    "SKY": {"trip_updates": False, "vehicle_positions": False, "alerts": False},
+    "SOF": {"trip_updates": False, "vehicle_positions": False, "alerts": False},
+    "TEL": {"trip_updates": True, "vehicle_positions": True, "alerts": False},
+    "TRO": {"trip_updates": True, "vehicle_positions": True, "alerts": False},
+    "VKT": {"trip_updates": False, "vehicle_positions": False, "alerts": False},
+    "VOT": {"trip_updates": True, "vehicle_positions": True, "alerts": False},
+    "VYB": {"trip_updates": True, "vehicle_positions": True, "alerts": True},
+    "VYG": {"trip_updates": True, "vehicle_positions": True, "alerts": False},
+    "VYX": {"trip_updates": True, "vehicle_positions": True, "alerts": True},
+}
+
+
+def load_feeds_from_json(file_path: Optional[Path] = None) -> List[FeedConfig]:
+    """Load feed configurations from a JSON file (e.g. realtime_feeds.json or feeds.json)."""
+    if file_path is None:
+        env_path = os.environ.get("REALTIME_FEEDS_FILE", "").strip()
+        candidates = [
+            Path(env_path) if env_path else None,
+            BASE_DIR / "realtime_feeds.json",
+            BASE_DIR / "feeds.json",
+            BASE_DIR / "realtime" / "feeds.json",
+        ]
+        file_path = next((p for p in candidates if p and p.is_file()), None)
+
+    if not file_path or not file_path.is_file():
+        return []
+
+    try:
+        data = json.loads(file_path.read_text(encoding="utf-8"))
+        raw_list = data if isinstance(data, list) else data.get("feeds", [])
+        configs = []
+        for item in raw_list:
+            if not isinstance(item, dict):
+                continue
+            if not item.get("enabled", True):
+                continue
+            name = str(item.get("name", "")).strip()
+            url = str(item.get("url", "")).strip()
+            if not name or not url:
+                continue
+            interval = int(item.get("interval", 30))
+            stale_threshold = int(item.get("stale_threshold", max(interval * 3, 90)))
+            headers = item.get("headers") or {}
+            feed_type = item.get("feed_type")
+
+            configs.append(
+                FeedConfig(
+                    name=name,
+                    default_url=url,
+                    default_interval=interval,
+                    default_stale=stale_threshold,
+                    headers=headers,
+                    feed_type=feed_type,
+                )
+            )
+        log.info("Loaded %d feed(s) from %s", len(configs), file_path)
+        return configs
+    except Exception as exc:
+        log.error("Failed to load realtime feeds JSON from %s: %s", file_path, exc)
+        return []
+
+
+def get_feed_configs(feeds_file: Optional[Path] = None) -> List[FeedConfig]:
+    """Build list of feed configurations dynamically from JSON file and/or environment variables."""
+    # 1. Load from JSON file if present
+    json_configs = load_feeds_from_json(feeds_file)
+
+    # 2. Build configs from environment variables
+    env_configs: List[FeedConfig] = []
+
+    # Norway / Entur feeds (if ENTUR_DATASOURCES configured)
+    entur_raw = os.environ.get("ENTUR_DATASOURCES", "").strip()
+    if entur_raw:
+        codespaces = [c.strip().upper() for c in entur_raw.split(",") if c.strip()]
+        if "ALL" in codespaces:
+            codespaces = [k for k, v in ENTUR_SUPPORTED_CODESPACES.items() if any(v.values())]
+
+        poll_interval = int(os.environ.get("REALTIME_POLL_INTERVAL_ENTUR", "30"))
+        stale_threshold = int(os.environ.get("REALTIME_STALE_THRESHOLD_ENTUR", "90"))
+
+        # If user specifies 'ALL', 'NATIONAL', or 'NORWAY', poll the unified national endpoints
+        if any(c in ("ALL", "NATIONAL", "NORWAY") for c in codespaces):
+            env_configs.append(
+                FeedConfig(
+                    name="entur_national_trip_updates",
+                    env_url_key="ENTUR_TRIP_UPDATES_URL",
+                    default_url="https://api.entur.io/realtime/v1/gtfs-rt/trip-updates",
+                    env_interval_key="REALTIME_POLL_INTERVAL_ENTUR",
+                    default_interval=poll_interval,
+                    env_stale_key="REALTIME_STALE_THRESHOLD_ENTUR",
+                    default_stale=stale_threshold,
+                )
+            )
+            env_configs.append(
+                FeedConfig(
+                    name="entur_national_vehicle_positions",
+                    env_url_key="ENTUR_VEHICLE_POSITIONS_URL",
+                    default_url="https://api.entur.io/realtime/v1/gtfs-rt/vehicle-positions",
+                    env_interval_key="REALTIME_POLL_INTERVAL_ENTUR",
+                    default_interval=poll_interval,
+                    env_stale_key="REALTIME_STALE_THRESHOLD_ENTUR",
+                    default_stale=stale_threshold,
+                )
+            )
+            env_configs.append(
+                FeedConfig(
+                    name="entur_national_alerts",
+                    env_url_key="ENTUR_ALERTS_URL",
+                    default_url="https://api.entur.io/realtime/v1/gtfs-rt/alerts",
+                    env_interval_key="REALTIME_POLL_INTERVAL_ENTUR_ALERTS",
+                    default_interval=max(poll_interval * 2, 60),
+                    env_stale_key="REALTIME_STALE_THRESHOLD_ENTUR_ALERTS",
+                    default_stale=stale_threshold * 2,
+                )
+            )
+        else:
+            for cs in codespaces:
+                caps = ENTUR_SUPPORTED_CODESPACES.get(cs, {"trip_updates": True, "vehicle_positions": True, "alerts": True})
+                cs_lower = cs.lower()
+                if caps.get("trip_updates"):
+                    env_configs.append(
+                        FeedConfig(
+                            name=f"entur_{cs_lower}_trip_updates",
+                            env_url_key=f"ENTUR_{cs}_TRIP_UPDATES_URL",
+                            default_url=f"https://api.entur.io/realtime/v1/gtfs-rt/trip-updates?datasource={cs}",
+                            env_interval_key="REALTIME_POLL_INTERVAL_ENTUR",
+                            default_interval=poll_interval,
+                            env_stale_key="REALTIME_STALE_THRESHOLD_ENTUR",
+                            default_stale=stale_threshold,
+                        )
+                    )
+                if caps.get("vehicle_positions"):
+                    env_configs.append(
+                        FeedConfig(
+                            name=f"entur_{cs_lower}_vehicle_positions",
+                            env_url_key=f"ENTUR_{cs}_VEHICLE_POSITIONS_URL",
+                            default_url=f"https://api.entur.io/realtime/v1/gtfs-rt/vehicle-positions?datasource={cs}",
+                            env_interval_key="REALTIME_POLL_INTERVAL_ENTUR",
+                            default_interval=poll_interval,
+                            env_stale_key="REALTIME_STALE_THRESHOLD_ENTUR",
+                            default_stale=stale_threshold,
+                        )
+                    )
+                if caps.get("alerts"):
+                    env_configs.append(
+                        FeedConfig(
+                            name=f"entur_{cs_lower}_alerts",
+                            env_url_key=f"ENTUR_{cs}_ALERTS_URL",
+                            default_url=f"https://api.entur.io/realtime/v1/gtfs-rt/alerts?datasource={cs}",
+                            env_interval_key="REALTIME_POLL_INTERVAL_ENTUR_ALERTS",
+                            default_interval=max(poll_interval * 2, 60),
+                            env_stale_key="REALTIME_STALE_THRESHOLD_ENTUR_ALERTS",
+                            default_stale=stale_threshold * 2,
+                        )
+                    )
+
+    # Base feeds (Netherlands) if neither JSON file nor ENTUR_ONLY is present
+    entur_only = os.environ.get("ENTUR_ONLY", "false").strip().lower() in ("1", "true", "yes", "on")
+    if not entur_only and not json_configs:
+        env_configs.extend([
+            FeedConfig(
+                name="trip_updates",
+                env_url_key="REALTIME_TRIP_UPDATES_URL",
+                default_url="https://gtfs.ovapi.nl/nl/tripUpdates.pb",
+                env_interval_key="REALTIME_POLL_INTERVAL_TRIP_UPDATES",
+                default_interval=30,
+                env_stale_key="REALTIME_STALE_THRESHOLD_UPDATES",
+                default_stale=90,
+            ),
+            FeedConfig(
+                name="train_updates",
+                env_url_key="REALTIME_TRAIN_UPDATES_URL",
+                default_url="https://gtfs.ovapi.nl/nl/trainUpdates.pb",
+                env_interval_key="REALTIME_POLL_INTERVAL_TRAIN_UPDATES",
+                default_interval=30,
+                env_stale_key="REALTIME_STALE_THRESHOLD_UPDATES",
+                default_stale=90,
+            ),
+            FeedConfig(
+                name="vehicle_positions",
+                env_url_key="REALTIME_VEHICLE_POSITIONS_URL",
+                default_url="https://gtfs.ovapi.nl/nl/vehiclePositions.pb",
+                env_interval_key="REALTIME_POLL_INTERVAL_VEHICLE_POSITIONS",
+                default_interval=30,
+                env_stale_key="REALTIME_STALE_THRESHOLD_UPDATES",
+                default_stale=90,
+            ),
+            FeedConfig(
+                name="alerts",
+                env_url_key="REALTIME_ALERTS_URL",
+                default_url="https://gtfs.ovapi.nl/nl/alerts.pb",
+                env_interval_key="REALTIME_POLL_INTERVAL_ALERTS",
+                default_interval=60,
+                env_stale_key="REALTIME_STALE_THRESHOLD_ALERTS",
+                default_stale=180,
+            ),
+        ])
+
+    # Merge JSON configs with env configs (deduplicating by feed name)
+    merged: List[FeedConfig] = []
+    seen = set()
+    for cfg in (json_configs + env_configs):
+        if cfg.name not in seen:
+            seen.add(cfg.name)
+            merged.append(cfg)
+
+    return merged
+
+
+FEED_CONFIGS = get_feed_configs()
 
 
 def _parse_trip_update(entity, feed_source: str) -> Dict[str, Any]:
@@ -221,8 +429,16 @@ def _parse_alert(entity, feed_source: str) -> Dict[str, Any]:
             "stop_id": ie.stop_id if ie.HasField("stop_id") else None,
         })
 
-    header = al.header_text.translation[0].text if al.header_text.translation else None
-    desc = al.description_text.translation[0].text if al.description_text.translation else None
+    header = (
+        al.header_text.translation[0].text
+        if (al.HasField("header_text") and al.header_text.translation)
+        else (al.header_text.translation[0].text if getattr(al, "header_text", None) and getattr(al.header_text, "translation", None) else None)
+    )
+    desc = (
+        al.description_text.translation[0].text
+        if (al.HasField("description_text") and al.description_text.translation)
+        else (al.description_text.translation[0].text if getattr(al, "description_text", None) and getattr(al.description_text, "translation", None) else None)
+    )
 
     return {
         "entity_id": entity.id,
@@ -266,11 +482,11 @@ def parse_feed_message(content: bytes, feed_name: str) -> Tuple[List[Dict[str, A
         if getattr(entity, "is_deleted", False):
             entities.append({"entity_id": entity.id, "is_deleted": True})
             continue
-        if feed_name in ("trip_updates", "train_updates") and entity.HasField("trip_update"):
+        if entity.HasField("trip_update"):
             entities.append(_parse_trip_update(entity, feed_name))
-        elif feed_name == "vehicle_positions" and (entity.HasField("vehicle") or entity.HasField("vehicle_position")):
+        elif entity.HasField("vehicle"):
             entities.append(_parse_vehicle_position(entity, feed_name))
-        elif feed_name == "alerts" and entity.HasField("alert"):
+        elif entity.HasField("alert"):
             entities.append(_parse_alert(entity, feed_name))
 
     return entities, inc
@@ -285,21 +501,34 @@ class RealtimePoller:
         self.timeout = float(os.environ.get("REALTIME_HTTP_TIMEOUT_SECONDS", "15"))
         self.max_retries = int(os.environ.get("REALTIME_HTTP_MAX_RETRIES", "2"))
         self.lock_ttl = int(os.environ.get("REALTIME_LOCK_TTL_SECONDS", "45"))
+        max_concurrent = int(os.environ.get("REALTIME_MAX_CONCURRENT_FETCHES", "30"))
+        self._semaphore = asyncio.Semaphore(max_concurrent)
         self._running = False
         self._tasks: List[asyncio.Task] = []
         self._client: Optional[httpx.AsyncClient] = None
 
     async def start(self) -> None:
         self._running = True
+        client_name = os.environ.get("ENTUR_CLIENT_NAME", os.environ.get("REALTIME_CLIENT_NAME", "zeus-gtfsroutes")).strip()
+        headers = {
+            "User-Agent": "GTFSRealtimeClient/1.0 (+https://github.com)",
+            "ET-Client-Name": client_name,
+        }
         self._client = httpx.AsyncClient(
             timeout=self.timeout,
             follow_redirects=True,
-            headers={"User-Agent": "GTFSRealtimeClient/1.0 (+https://github.com)"},
+            headers=headers,
         )
-        log.info("Starting RealtimePoller [%s]...", self.worker_id)
+        feed_configs = get_feed_configs()
+        log.info(
+            "Starting RealtimePoller [%s] with ET-Client-Name: '%s' (%d feeds configured)...",
+            self.worker_id,
+            client_name,
+            len(feed_configs),
+        )
         # Spawn one worker loop per feed plus leader renewal loop
         self._tasks.append(asyncio.create_task(self._leader_supervision_loop()))
-        for cfg in FEED_CONFIGS:
+        for cfg in feed_configs:
             self._tasks.append(asyncio.create_task(self._feed_polling_loop(cfg)))
 
     async def stop(self) -> None:
@@ -351,6 +580,8 @@ class RealtimePoller:
         meta.last_attempt = now_iso
 
         headers = {}
+        if cfg.headers:
+            headers.update(cfg.headers)
         if cfg.etag:
             headers["If-None-Match"] = cfg.etag
         if cfg.last_modified:
@@ -361,64 +592,65 @@ class RealtimePoller:
         last_exc: Optional[Exception] = None
         fetch_start = time.time()
 
-        while attempt <= self.max_retries and not success:
-            attempt += 1
-            try:
-                assert self._client is not None
-                resp = await self._client.get(cfg.url, headers=headers)
-                meta.http_status = resp.status_code
+        async with self._semaphore:
+            while attempt <= self.max_retries and not success:
+                attempt += 1
+                try:
+                    assert self._client is not None
+                    resp = await self._client.get(cfg.url, headers=headers)
+                    meta.http_status = resp.status_code
 
-                if resp.status_code == 304:
-                    # Not modified: retain cached snapshot and reset errors
-                    log.debug("Feed %s not modified (304)", cfg.name)
+                    if resp.status_code == 304:
+                        # Not modified: retain cached snapshot and reset errors
+                        log.debug("Feed %s not modified (304)", cfg.name)
+                        meta.error_count = 0
+                        meta.last_error = None
+                        meta.last_success = now_iso
+                        meta.health_state = HealthState.HEALTHY
+                        meta.cache_age_seconds = 0.0
+                        meta.fetch_duration_ms = round((time.time() - fetch_start) * 1000, 1)
+                        await self.cache.update_snapshot(cfg.name, [], meta, is_differential=True)
+                        return
+
+                    resp.raise_for_status()
+
+                    # Validate payload
+                    content = resp.content
+                    if not content or len(content) < 4:
+                        raise ValueError(f"Received empty or truncated payload ({len(content)} bytes)")
+
+                    # Parse & Normalize
+                    entities, inc = parse_feed_message(content, cfg.name)
+
+                    # Store headers
+                    if "ETag" in resp.headers:
+                        cfg.etag = resp.headers["ETag"]
+                    if "Last-Modified" in resp.headers:
+                        cfg.last_modified = resp.headers["Last-Modified"]
+
+                    # Update metadata
+                    meta.incrementality = inc
+                    meta.last_success = now_iso
                     meta.error_count = 0
                     meta.last_error = None
-                    meta.last_success = now_iso
                     meta.health_state = HealthState.HEALTHY
                     meta.cache_age_seconds = 0.0
                     meta.fetch_duration_ms = round((time.time() - fetch_start) * 1000, 1)
-                    await self.cache.update_snapshot(cfg.name, [], meta, is_differential=True)
-                    return
 
-                resp.raise_for_status()
+                    is_diff = (inc == "DIFFERENTIAL")
+                    await self.cache.update_snapshot(cfg.name, entities, meta, is_differential=is_diff)
+                    log.info(
+                        "Fetched feed %-17s: %5d entities [%s] in %4.0f ms",
+                        cfg.name,
+                        len(entities),
+                        inc,
+                        meta.fetch_duration_ms,
+                    )
+                    success = True
 
-                # Validate payload
-                content = resp.content
-                if not content or len(content) < 4:
-                    raise ValueError(f"Received empty or truncated payload ({len(content)} bytes)")
-
-                # Parse & Normalize
-                entities, inc = parse_feed_message(content, cfg.name)
-
-                # Store headers
-                if "ETag" in resp.headers:
-                    cfg.etag = resp.headers["ETag"]
-                if "Last-Modified" in resp.headers:
-                    cfg.last_modified = resp.headers["Last-Modified"]
-
-                # Update metadata
-                meta.incrementality = inc
-                meta.last_success = now_iso
-                meta.error_count = 0
-                meta.last_error = None
-                meta.health_state = HealthState.HEALTHY
-                meta.cache_age_seconds = 0.0
-                meta.fetch_duration_ms = round((time.time() - fetch_start) * 1000, 1)
-
-                is_diff = (inc == "DIFFERENTIAL")
-                await self.cache.update_snapshot(cfg.name, entities, meta, is_differential=is_diff)
-                log.info(
-                    "Fetched feed %-17s: %5d entities [%s] in %4.0f ms",
-                    cfg.name,
-                    len(entities),
-                    inc,
-                    meta.fetch_duration_ms,
-                )
-                success = True
-
-            except Exception as exc:
-                last_exc = exc
-                await asyncio.sleep(0.5 * attempt)
+                except Exception as exc:
+                    last_exc = exc
+                    await asyncio.sleep(0.5 * attempt)
 
         if not success:
             meta.error_count += 1

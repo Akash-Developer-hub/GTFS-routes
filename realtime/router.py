@@ -27,14 +27,16 @@ realtime_router = APIRouter(prefix="/api/realtime", tags=["GTFS-Realtime"])
 
 # ── Health & Diagnostics ──────────────────────────────────────────────────────
 
-@realtime_router.get("/status")
+@realtime_router.api_route("/status", methods=["GET", "HEAD"])
 async def get_realtime_status(cache: CacheStore = Depends(get_cache_store)):
     """Return health, freshness, and entity statistics for all GTFS-Realtime feeds."""
-    feeds = ["trip_updates", "train_updates", "vehicle_positions", "alerts"]
+    feed_names = await cache.get_feed_names()
+    if not feed_names:
+        feed_names = ["trip_updates", "train_updates", "vehicle_positions", "alerts"]
     status_map = {}
     overall_health = HealthState.HEALTHY
 
-    for f in feeds:
+    for f in feed_names:
         meta = await cache.get_metadata(f)
         status_map[f] = meta
         if meta.health_state in (HealthState.STALE, HealthState.UNAVAILABLE):
@@ -118,7 +120,7 @@ async def get_realtime_for_stop(
 
 @realtime_router.get("/trip-updates", response_model=ResponseEnvelope[List[TripUpdate]])
 async def get_trip_updates(
-    feed: str = Query(default="all", pattern="^(all|bus|train)$", description="Feed: 'all', 'bus', or 'train'"),
+    feed: str = Query(default="all", description="Feed: 'all', 'bus', 'train', or specific feed name/keyword"),
     route_id: Optional[str] = Query(default=None, description="Filter by route_id"),
     trip_id: Optional[str] = Query(default=None, description="Filter by trip_id"),
     stop_id: Optional[str] = Query(default=None, description="Filter updates touching this stop_id"),
@@ -129,15 +131,21 @@ async def get_trip_updates(
     """
     Query cached trip and train updates with filtering.
     """
+    all_known_feeds = await cache.get_feed_names()
+    trip_feed_names = [f for f in all_known_feeds if "trip" in f or "train" in f or "update" in f] or ["trip_updates", "train_updates"]
+
     # Fast path if single route requested
     if route_id and not stop_id and not trip_id:
         rt_route = await cache.get_by_route(route_id)
         updates = rt_route.trip_updates
         if feed == "bus":
-            updates = [u for u in updates if u.feed_source == "trip_updates"]
+            updates = [u for u in updates if u.feed_source != "train_updates"]
         elif feed == "train":
             updates = [u for u in updates if u.feed_source == "train_updates"]
-        meta = await cache.get_metadata("trip_updates")
+        elif feed != "all":
+            updates = [u for u in updates if feed.lower() in (u.feed_source or "").lower()]
+        first_feed = trip_feed_names[0] if trip_feed_names else "trip_updates"
+        meta = await cache.get_metadata(first_feed)
         return ResponseEnvelope(
             success=True,
             feed=feed,
@@ -148,13 +156,19 @@ async def get_trip_updates(
 
     # Collect feeds
     feed_names = []
-    if feed in ("all", "bus"):
-        feed_names.append("trip_updates")
-    if feed in ("all", "train"):
-        feed_names.append("train_updates")
+    if feed == "all":
+        feed_names = trip_feed_names
+    elif feed == "bus":
+        feed_names = [f for f in trip_feed_names if "train" not in f]
+    elif feed == "train":
+        feed_names = [f for f in trip_feed_names if "train" in f]
+    else:
+        matched = [f for f in trip_feed_names if feed.lower() in f.lower()]
+        feed_names = matched or trip_feed_names
 
     all_entities = []
-    meta = await cache.get_metadata(feed_names[0])
+    first_feed = feed_names[0] if feed_names else "trip_updates"
+    meta = await cache.get_metadata(first_feed)
     for fn in feed_names:
         entities, _, _ = await cache.get_all_entities(fn, limit=5000, offset=0)
         all_entities.extend(entities)
@@ -194,9 +208,13 @@ async def get_vehicle_positions(
     """
     Query cached vehicle GPS positions with optional route, vehicle, and bounding box filters.
     """
+    all_known_feeds = await cache.get_feed_names()
+    veh_feeds = [f for f in all_known_feeds if "vehicle" in f] or ["vehicle_positions"]
+    first_feed = veh_feeds[0] if veh_feeds else "vehicle_positions"
+
     if route_id and not bbox and not vehicle_id:
         rt_route = await cache.get_by_route(route_id)
-        meta = await cache.get_metadata("vehicle_positions")
+        meta = await cache.get_metadata(first_feed)
         return ResponseEnvelope(
             success=True,
             feed="vehicle_positions",
@@ -214,7 +232,12 @@ async def get_vehicle_positions(
         except Exception:
             pass
 
-    entities, _, meta = await cache.get_all_entities("vehicle_positions", limit=10000, offset=0)
+    entities = []
+    meta = await cache.get_metadata(first_feed)
+    for vf in veh_feeds:
+        ents, _, _ = await cache.get_all_entities(vf, limit=10000, offset=0)
+        entities.extend(ents)
+
     filtered = []
     for item in entities:
         if route_id and str(item.get("route_id")) != str(route_id):
@@ -250,9 +273,13 @@ async def get_alerts(
     """
     Query cached service alerts with route and stop filtering.
     """
+    all_known_feeds = await cache.get_feed_names()
+    alert_feeds = [f for f in all_known_feeds if "alert" in f] or ["alerts"]
+    first_feed = alert_feeds[0] if alert_feeds else "alerts"
+
     if route_id and not stop_id:
         rt_route = await cache.get_by_route(route_id)
-        meta = await cache.get_metadata("alerts")
+        meta = await cache.get_metadata(first_feed)
         return ResponseEnvelope(
             success=True,
             feed="alerts",
@@ -261,7 +288,11 @@ async def get_alerts(
             data=rt_route.alerts[offset : offset + limit],
         )
 
-    entities, _, meta = await cache.get_all_entities("alerts", limit=2000, offset=0)
+    entities = []
+    meta = await cache.get_metadata(first_feed)
+    for af in alert_feeds:
+        ents, _, _ = await cache.get_all_entities(af, limit=2000, offset=0)
+        entities.extend(ents)
     now_epoch = int(time.time())
     filtered = []
 
