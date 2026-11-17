@@ -36,32 +36,32 @@
     "name": "netherlands_trip_updates",
     "feed_type": "trip_updates",
     "url": "https://gtfs.ovapi.nl/nl/tripUpdates.pb",
-    "interval": 30,
-    "stale_threshold": 90,
+    "interval": 60,
+    "stale_threshold": 180,
     "enabled": true
   },
   {
     "name": "netherlands_train_updates",
     "feed_type": "trip_updates",
     "url": "https://gtfs.ovapi.nl/nl/trainUpdates.pb",
-    "interval": 30,
-    "stale_threshold": 90,
+    "interval": 60,
+    "stale_threshold": 180,
     "enabled": true
   },
   {
     "name": "netherlands_vehicle_positions",
     "feed_type": "vehicle_positions",
     "url": "https://gtfs.ovapi.nl/nl/vehiclePositions.pb",
-    "interval": 30,
-    "stale_threshold": 90,
+    "interval": 45,
+    "stale_threshold": 120,
     "enabled": true
   },
   {
     "name": "netherlands_alerts",
     "feed_type": "alerts",
     "url": "https://gtfs.ovapi.nl/nl/alerts.pb",
-    "interval": 60,
-    "stale_threshold": 180,
+    "interval": 120,
+    "stale_threshold": 300,
     "enabled": true
   }
 ]

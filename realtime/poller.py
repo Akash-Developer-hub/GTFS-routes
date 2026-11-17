@@ -598,6 +598,8 @@ def _download_and_parse_worker(url: str, headers: dict, feed_name: str, timeout:
     resp_headers = dict(resp.headers)
     if status_code == 304:
         return 304, resp_headers, [], "DIFFERENTIAL"
+    if status_code == 429:
+        return 429, resp_headers, [], "DIFFERENTIAL"
     resp.raise_for_status()
     content = resp.content
     if not content or len(content) < 4:
@@ -683,7 +685,9 @@ class RealtimePoller:
                 log.debug("Worker %s is standing by (not leader)", self.worker_id)
 
             elapsed = time.time() - start_time
-            sleep_time = max(1.0, cfg.interval - elapsed)
+            interval = getattr(cfg, "interval_override", None) or cfg.interval
+            cfg.interval_override = None
+            sleep_time = max(1.0, interval - elapsed)
             try:
                 await asyncio.sleep(sleep_time)
             except asyncio.CancelledError:
@@ -727,6 +731,27 @@ class RealtimePoller:
                         meta.cache_age_seconds = 0.0
                         meta.fetch_duration_ms = round((time.time() - fetch_start) * 1000, 1)
                         await self.cache.update_snapshot(cfg.name, [], meta, is_differential=True)
+                        return
+
+                    if status_code == 429:
+                        # Rate limited by upstream server (e.g. gtfs.ovapi.nl): do NOT retry immediately!
+                        retry_after = 60
+                        if "Retry-After" in resp_headers:
+                            try:
+                                retry_after = max(30, int(resp_headers["Retry-After"]))
+                            except ValueError:
+                                pass
+                        log.warning(
+                            "Feed %s rate-limited (HTTP 429) by upstream server. Retaining cached data and backing off for %ds.",
+                            cfg.name,
+                            retry_after,
+                        )
+                        meta.http_status = 429
+                        meta.last_error = f"429 Too Many Requests (upstream rate-limit, backing off {retry_after}s)"
+                        meta.error_count += 1
+                        meta.health_state = HealthState.DEGRADED
+                        await self.cache.update_snapshot(cfg.name, [], meta, is_differential=True)
+                        cfg.interval_override = retry_after
                         return
 
                     # Store headers
