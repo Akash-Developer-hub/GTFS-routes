@@ -16,7 +16,7 @@ import os
 import sys
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -603,6 +603,13 @@ def _download_and_parse_worker(url: str, headers: dict, feed_name: str, timeout:
         client_name = os.environ.get("ENTUR_CLIENT_NAME", os.environ.get("REALTIME_CLIENT_NAME", "zeus-gtfsroutes")).strip()
         req_headers["ET-Client-Name"] = client_name
 
+    # ovapi.nl requires conditional caching headers (If-Modified-Since / If-None-Match) to bypass HAProxy 429 scrape filter
+    lowered_req = {k.lower(): v for k, v in req_headers.items()}
+    if "ovapi.nl" in url and "if-modified-since" not in lowered_req and "if-none-match" not in lowered_req:
+        req_headers["If-Modified-Since"] = (
+            datetime.now(timezone.utc) - timedelta(hours=2)
+        ).strftime("%a, %d %b %Y %H:%M:%S GMT")
+
     resp = client.get(url, headers=req_headers)
     status_code = resp.status_code
     resp_headers = dict(resp.headers)
@@ -736,9 +743,17 @@ class RealtimePoller:
                     )
                     meta.http_status = status_code
 
+                    # Store/refresh conditional caching headers (case-insensitive)
+                    lowered_resp = {k.lower(): v for k, v in resp_headers.items()}
+                    if "etag" in lowered_resp:
+                        cfg.etag = lowered_resp["etag"]
+                    if "last-modified" in lowered_resp:
+                        cfg.last_modified = lowered_resp["last-modified"]
+
                     if status_code == 304:
                         # Not modified: retain cached snapshot and reset errors
                         log.debug("Feed %s not modified (304)", cfg.name)
+                        cfg._consecutive_429 = 0
                         meta.error_count = 0
                         meta.last_error = None
                         meta.last_success = now_iso
@@ -775,14 +790,8 @@ class RealtimePoller:
                         cfg.interval_override = retry_after
                         return
 
-                    # On successful fetch (200 or 304), reset the consecutive 429 incident counter
+                    # On successful fetch (200), reset the consecutive 429 incident counter
                     cfg._consecutive_429 = 0
-
-                    # Store headers
-                    if "ETag" in resp_headers:
-                        cfg.etag = resp_headers["ETag"]
-                    if "Last-Modified" in resp_headers:
-                        cfg.last_modified = resp_headers["Last-Modified"]
 
                     # Update metadata
                     meta.incrementality = inc
