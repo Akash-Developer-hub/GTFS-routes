@@ -1481,7 +1481,15 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.auto_index is not None:
-        db_paths = [_resolve(p) for p in args.auto_index] if args.auto_index else [t.db_path for t in cfg.targets]
+        if args.auto_index:
+            db_paths = [_resolve(p) for p in args.auto_index]
+        else:
+            # When passed without arguments, auto-index all .sqlite files in the folder and .env targets
+            found_paths = set(t.db_path for t in cfg.targets if t.db_path.exists())
+            found_paths.update(p.resolve() for p in BASE_DIR.glob("*.sqlite") if p.is_file())
+            if (BASE_DIR / "gtfs_feeds").is_dir():
+                found_paths.update(p.resolve() for p in (BASE_DIR / "gtfs_feeds").glob("*.sqlite") if p.is_file())
+            db_paths = sorted(found_paths)
         for p in db_paths:
             auto_index_database(p)
         return 0
